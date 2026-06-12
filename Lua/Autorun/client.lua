@@ -14,15 +14,17 @@ end)
 
 _G.SendMyVoiceSettings = function(pitch, speed, voice)
     if not Character.Controlled then return end
-    local msg = Networking.Start("TTS_VOICE_SYNC")
-    msg.WriteUInt16(Character.Controlled.ID)
-    msg.WriteInt16(pitch)
-    msg.WriteInt16(speed)
-    msg.WriteString(voice)
-    Networking.Send(msg)
-    
     -- Set locally too
     CustomVoices[Character.Controlled.ID] = {pitch = pitch, speed = speed, voice = voice}
+    
+    if Game.Client then
+        local msg = Networking.Start("TTS_VOICE_SYNC")
+        msg.WriteUInt16(Character.Controlled.ID)
+        msg.WriteInt16(pitch)
+        msg.WriteInt16(speed)
+        msg.WriteString(voice)
+        Networking.Send(msg)
+    end
 end
 
 local ttsManager = TTSManager
@@ -94,5 +96,7 @@ Hook.Add("think", "TTSModThink", function()
 end)
 
 -- Request cache from server now that we are fully loaded
-local reqMsg = Networking.Start("TTS_REQUEST_SYNC")
-Networking.Send(reqMsg)
+if Game.Client then
+    local reqMsg = Networking.Start("TTS_REQUEST_SYNC")
+    Networking.Send(reqMsg)
+end
