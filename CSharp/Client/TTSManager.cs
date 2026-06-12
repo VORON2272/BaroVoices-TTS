@@ -461,23 +461,26 @@ public static class TTSManager
 
     public static string GetScriptPath(string scriptName)
     {
-        if (System.IO.Directory.Exists("LocalMods"))
+        List<string> rootDirs = new List<string> 
+        { 
+            "LocalMods", 
+            "WorkshopMods/Installed",
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Daedalic Entertainment GmbH", "Barotrauma", "WorkshopMods", "Installed")
+        };
+
+        foreach (var root in rootDirs)
         {
-            foreach (var dir in System.IO.Directory.GetDirectories("LocalMods"))
+            if (System.IO.Directory.Exists(root))
             {
-                string p = System.IO.Path.Combine(dir, scriptName);
-                if (System.IO.File.Exists(p) && System.IO.File.Exists(System.IO.Path.Combine(dir, "Server", "silero_server.py"))) return p;
+                foreach (var dir in System.IO.Directory.GetDirectories(root))
+                {
+                    string p = System.IO.Path.Combine(dir, scriptName);
+                    if (System.IO.File.Exists(p) && System.IO.File.Exists(System.IO.Path.Combine(dir, "Server", "silero_server.py"))) 
+                        return p;
+                }
             }
         }
-        if (System.IO.Directory.Exists("WorkshopMods/Installed"))
-        {
-            foreach (var dir in System.IO.Directory.GetDirectories("WorkshopMods/Installed"))
-            {
-                string p = System.IO.Path.Combine(dir, scriptName);
-                if (System.IO.File.Exists(p) && System.IO.File.Exists(System.IO.Path.Combine(dir, "Server", "silero_server.py"))) return p;
-            }
-        }
-        return "LocalMods/Barotrauma-AI-Play/" + scriptName;
+        return "LocalMods/BaroVoices TTS/" + scriptName;
     }
 
     private static void LoadSettings()
