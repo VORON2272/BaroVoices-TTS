@@ -3,7 +3,7 @@
     <a href="README.md">🇺🇸 English</a> | <a href="README_ru.md">🇷🇺 Русский</a>
   </p>
   <!-- ЗДЕСЬ ЗАМЕНИ ССЫЛКУ НА СВОЙ ЛОГОТИП (например загрузи картинку на GitHub в репозиторий и вставь ссылку) -->
-  <img src="https://via.placeholder.com/800x300/1a1a2e/00d2ff?text=BaroVoices+TTS+Logo" alt="BaroVoices TTS Logo" />
+  <img src="https://raw.githubusercontent.com/VORON2272/BaroVoices-TTS/refs/heads/main/BaroVoices%20TTS.png" alt="BaroVoices TTS Logo" />
   <h1>BaroVoices TTS</h1>
   <p><b>ИИ Озвучка чата в реальном времени (TTS) для мультиплеера Barotrauma</b></p>
 </div>
