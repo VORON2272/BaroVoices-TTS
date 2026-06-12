@@ -26,10 +26,6 @@ Networking.Receive("TTS_VOICE_SYNC", function(msg, senderClient)
     end
 end)
 
-Hook.Add("clientConnected", "TTS_SendCache", function(connectedClient)
-    -- Deprecated, moving to client-requested sync to avoid timing issues
-end)
-
 Networking.Receive("TTS_REQUEST_SYNC", function(msg, senderClient)
     for charId, data in pairs(VoiceCache) do
         local outMsg = Networking.Start("TTS_VOICE_SYNC")

@@ -71,20 +71,25 @@ end, Hook.HookMethodType.After)
 print("[TTS Mod] Client TTS script loaded. SAPI Direct Playback enabled.")
 
 local lastSentCharId = 0
+local syncTimer = 0
+
 Hook.Add("think", "TTSModThink", function()
     if ttsManager and ttsManager.Update then
         ttsManager.Update()
     end
     
-    if Character.Controlled then
-        if Character.Controlled.ID ~= lastSentCharId then
-            lastSentCharId = Character.Controlled.ID
-            if ttsManager then
-                _G.SendMyVoiceSettings(ttsManager.MyPitch, ttsManager.MySpeed, ttsManager.VoiceName)
+    if Timer.GetTime() > syncTimer then
+        syncTimer = Timer.GetTime() + 1.0
+        if Character.Controlled then
+            if Character.Controlled.ID ~= lastSentCharId then
+                lastSentCharId = Character.Controlled.ID
+                if ttsManager then
+                    _G.SendMyVoiceSettings(ttsManager.MyPitch, ttsManager.MySpeed, ttsManager.VoiceName)
+                end
             end
+        else
+            lastSentCharId = 0
         end
-    else
-        lastSentCharId = 0
     end
 end)
 
