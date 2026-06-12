@@ -1,6 +1,6 @@
 <div align="center">
   <!-- ЗДЕСЬ ЗАМЕНИ ССЫЛКУ НА СВОЙ ЛОГОТИП (например загрузи картинку на GitHub в репозиторий и вставь ссылку) -->
-  <img src="https://via.placeholder.com/800x300/1a1a2e/00d2ff?text=BaroVoices+TTS+Logo" alt="BaroVoices TTS Logo" />
+  <img src="https://via.placeholder.com/800x300/1a1a2e/00d2ff?text=BaroVoices+TTS+Logo alt="BaroVoices TTS Logo" />
   <h1>BaroVoices TTS</h1>
   <p><b>Real-time AI Text-to-Speech (TTS) for Barotrauma Multiplayer</b></p>
 </div>
