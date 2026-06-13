@@ -99,11 +99,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         else:
             active_model = model_en
             en_speaker_map = {
-                "baya": "en_1",      # Женский
-                "kseniya": "en_3",   # Женский
-                "xenia": "en_5",     # Женский
-                "eugene": "en_2",    # Мужской
-                "aidar": "en_0"      # Мужской
+                "baya": "en_1",
+                "kseniya": "en_3",
+                "xenia": "en_5",
+                "eugene": "en_2",
+                "aidar": "en_0"
             }
             active_speaker = en_speaker_map.get(speaker, "en_0")
             lang_label = "EN"
@@ -143,16 +143,6 @@ class RequestHandler(BaseHTTPRequestHandler):
             audio = torch.clamp(audio, -1.0, 1.0)
             
         if msg_type == "Radio":
-            try:
-                import torchaudio.functional as F
-                audio_2d = audio.unsqueeze(0)
-                audio_2d = F.highpass_biquad(audio_2d, req_sample_rate, 600.0)
-                audio_2d = F.lowpass_biquad(audio_2d, req_sample_rate, 2500.0)
-                audio_2d = audio_2d * 2.0 # Компенсация потери громкости
-                audio = audio_2d.squeeze(0)
-            except Exception as e:
-                print(f"Ошибка аудиофильтра рации: {e}" if is_ru else f"Radio filter error: {e}")
-                
             base_noise = 0.08
             dist_noise = min(max(distance - 1000.0, 0.0) / 4000.0, 1.0) * 0.25
             noise_level = base_noise + dist_noise
@@ -161,6 +151,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             audio = audio + noise
                 
             audio = torch.clamp(audio, -1.0, 1.0)
+
+            try:
+                import torchaudio.functional as F
+                audio_2d = audio.unsqueeze(0)
+                audio_2d = F.highpass_biquad(audio_2d, req_sample_rate, 600.0)
+                audio_2d = F.lowpass_biquad(audio_2d, req_sample_rate, 2500.0)
+                audio_2d = audio_2d * 2.5
+                audio = audio_2d.squeeze(0)
+            except Exception as e:
+                print(f"Ошибка аудиофильтра рации: {e}" if is_ru else f"Radio filter error: {e}")
         playback_rate = int(req_sample_rate * (1.0 + (rate * 0.03)))
         
         buffer = io.BytesIO()
@@ -191,7 +191,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             
         try:
             future = executor.submit(self._generate_audio, text, speaker, req_sample_rate, boost, msg_type, distance, rate)
-            buffer = future.result() # Ожидаем выполнения задачи из очереди
+            buffer = future.result()
             
             self.send_response(200)
             self.send_header('Content-type', 'audio/ogg')

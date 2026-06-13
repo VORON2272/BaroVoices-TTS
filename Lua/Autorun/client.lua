@@ -95,6 +95,15 @@ Hook.Add("think", "TTSModThink", function()
     end
 end)
 
+Hook.Add("roundStart", "TTSModRoundStart", function()
+    CustomVoices = {}
+    lastSentCharId = 0
+    if Game.Client then
+        local reqMsg = Networking.Start("TTS_REQUEST_SYNC")
+        Networking.Send(reqMsg)
+    end
+end)
+
 -- Request cache from server now that we are fully loaded
 if Game.Client then
     local reqMsg = Networking.Start("TTS_REQUEST_SYNC")

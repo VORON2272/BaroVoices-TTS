@@ -1,0 +1,12 @@
+# Cache and temporary files
+Server/tts_cache/
+__pycache__/
+*.pyc
+
+# Python environments
+.venv/
+venv/
+env/
+
+# Mod specific temp files
+venv_path.txt

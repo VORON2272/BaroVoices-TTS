@@ -206,8 +206,10 @@ public static class TTSManager
                                     if (!isMuffled) break;
                                 }
                             }
-                            catch { } // Fallback if reflection or property fails
+                            catch { }
                         }
+
+                        if (msgType == "MuffledLocal") isMuffled = true;
 
                         channel.Muffled = isMuffled;
                     }
@@ -221,14 +223,14 @@ public static class TTSManager
         return new List<string> { "aidar", "baya", "kseniya", "xenia", "eugene", "en_0", "en_1", "en_2", "en_3", "en_4", "en_5" };
     }
 
-    private static void SendTTSRequest(Character character, string text, string voice, int rate, int volume, string msgType, float distance)
+    private static void SendTTSRequest(Character character, string text, string voice, int rate, int volume, string msgType, float distance, int volumeBoost)
     {
         System.Threading.Tasks.Task.Run(async () =>
         {
             try
             {
                 string escapedText = text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r");
-                string json = $"{{\"text\":\"{escapedText}\",\"voice\":\"{voice}\",\"rate\":{rate},\"volume\":{volume},\"boost\":{Settings.VolumeBoost},\"msg_type\":\"{msgType}\",\"distance\":{distance.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"sample_rate\":{Settings.SampleRate}}}";
+                string json = $"{{\"text\":\"{escapedText}\",\"voice\":\"{voice}\",\"rate\":{rate},\"volume\":{volume},\"boost\":{volumeBoost},\"msg_type\":\"{msgType}\",\"distance\":{distance.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"sample_rate\":{Settings.SampleRate}}}";
                 var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
 
                 using (var client = new System.Net.Http.HttpClient())
@@ -300,9 +302,10 @@ public static class TTSManager
                     {
                         float gain = (safeVolume / 100f) * 2.5f;
                         Vector2 pos = character != null ? character.WorldPosition : Vector2.Zero;
-                        var channel = sound.Play(gain, 1500f, pos);
+                        var channel = msgType == "Radio" ? sound.Play(gain) : sound.Play(gain, 1500f, pos);
                         if (channel != null) {
-                            if (msgType != "Radio") channel.Muffled = false; // Muffle will be calculated dynamically in Update()
+                            if (msgType == "MuffledLocal") channel.Muffled = true;
+                            else channel.Muffled = false; 
                         }
 
                         if (channel == null)
@@ -311,11 +314,12 @@ public static class TTSManager
                             Task.Delay(300).ContinueWith(__ => {
                                 float retryGain = (safeVolume / 100f) * 2.5f;
                                 Vector2 retryPos = character != null ? character.WorldPosition : Vector2.Zero;
-                                var retryChannel = sound.Play(retryGain, 1500f, retryPos);
+                                var retryChannel = msgType == "Radio" ? sound.Play(retryGain) : sound.Play(retryGain, 1500f, retryPos);
                                 if (retryChannel != null) {
-                                    if (msgType != "Radio") {
-                                        retryChannel.Muffled = false; // Updated dynamically
-                                        if (character != null) {
+                                    if (msgType == "MuffledLocal") retryChannel.Muffled = true;
+                                    else {
+                                        retryChannel.Muffled = false; 
+                                        if (msgType != "Radio" && character != null) {
                                             retryChannel.Position = new Vector3(character.WorldPosition.X, character.WorldPosition.Y, 0f);
                                             lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(retryChannel, character, msgType)); }
                                         }
@@ -354,6 +358,59 @@ public static class TTSManager
         }
     }
 
+    private static void ParseEmotions(string text, ref int volumeBoost)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        
+        int upperCount = 0;
+        int letterCount = 0;
+        foreach (char c in text)
+        {
+            if (char.IsLetter(c))
+            {
+                letterCount++;
+                if (char.IsUpper(c)) upperCount++;
+            }
+        }
+        
+
+        if (letterCount > 3 && upperCount > letterCount * 0.6f)
+        {
+            volumeBoost += 35; 
+        }
+    }
+
+    private static void CheckCharacterState(Character character, ref int rate, ref int volumeBoost, ref string msgType)
+    {
+        if (character == null) return;
+        try 
+        {
+            if (character.AnimController != null && character.AnimController.InWater)
+            {
+                if (msgType != "Radio") msgType = "MuffledLocal";
+            }
+            else 
+            {
+                bool hasSuit = false;
+                if (character.Inventory != null)
+                {
+                    try { hasSuit = character.HasEquippedItem("divingsuit") || character.HasEquippedItem("deepdiving"); } catch { }
+                }
+                if (hasSuit && msgType != "Radio") msgType = "MuffledLocal";
+            }
+        }
+        catch { }
+
+        try 
+        {
+            if (character.HealthPercentage < 30f && character.HealthPercentage > 0f)
+            {
+                volumeBoost -= 30;
+            }
+        }
+        catch { }
+    }
+
     public static void Speak(Character character, string text, string msgType = "Default")
     {
         if (string.IsNullOrWhiteSpace(text)) return;
@@ -370,7 +427,7 @@ public static class TTSManager
         }
         else if (Settings.EnableUniqueVoices)
         {
-            int hash = Math.Abs(charName.GetHashCode());
+            int hash = character != null ? character.ID : Math.Abs(charName.GetHashCode());
             if (character != null && character.Info != null)
             {
                 string genderStr = "";
@@ -378,40 +435,37 @@ public static class TTSManager
                 {
                     var infoType = character.Info.GetType();
                     var gField = infoType.GetField("Gender", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (gField != null) genderStr = gField.GetValue(character.Info)?.ToString();
+                    if (gField != null) genderStr = gField.GetValue(character.Info)?.ToString() ?? "";
                     else 
                     {
                         var gProp = infoType.GetProperty("Gender", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                        if (gProp != null) genderStr = gProp.GetValue(character.Info)?.ToString();
-                        else 
-                        {
-                            var pProp = infoType.GetProperty("Pronouns", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                            if (pProp != null) genderStr = pProp.GetValue(character.Info)?.ToString();
-                        }
+                        if (gProp != null) genderStr = gProp.GetValue(character.Info)?.ToString() ?? "";
+                    }
+
+                    if (string.IsNullOrEmpty(genderStr))
+                    {
+                        var pProp = infoType.GetProperty("Pronouns", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                        if (pProp != null) genderStr = pProp.GetValue(character.Info)?.ToString() ?? "";
                     }
                 } 
                 catch { }
 
-                if (genderStr == "Male" || genderStr == "He")
-                {
-                    string[] maleVoices = { "aidar", "eugene" };
-                    voice = maleVoices[hash % maleVoices.Length];
-                }
-                else if (genderStr == "Female" || genderStr == "She")
+                if (genderStr.IndexOf("Female", StringComparison.OrdinalIgnoreCase) >= 0 || genderStr.IndexOf("She", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     string[] femaleVoices = { "baya", "kseniya", "xenia" };
                     voice = femaleVoices[hash % femaleVoices.Length];
                 }
                 else
                 {
-                    var voices = GetAvailableVoices();
-                    voice = voices[hash % voices.Count];
+
+                    string[] maleVoices = { "aidar", "eugene" };
+                    voice = maleVoices[hash % maleVoices.Length];
                 }
             }
             else
             {
-                var voices = GetAvailableVoices();
-                voice = voices[hash % voices.Count];
+                string[] maleVoices = { "aidar", "eugene" };
+                voice = maleVoices[hash % maleVoices.Length];
             }
         }
         
@@ -428,7 +482,15 @@ public static class TTSManager
             return;
         }
 
-        SendTTSRequest(character, text, voice, Settings.BaseRate, Settings.GlobalVolume, msgType, distance);
+        int finalRate = Settings.BaseRate;
+        int finalVolume = Settings.GlobalVolume;
+        int finalBoost = Settings.VolumeBoost;
+        string finalMsgType = msgType;
+
+        ParseEmotions(text, ref finalBoost);
+        CheckCharacterState(character, ref finalRate, ref finalBoost, ref finalMsgType);
+
+        SendTTSRequest(character, text, voice, finalRate, finalVolume, finalMsgType, distance, finalBoost);
     }
 
     public static void SpeakWithCustom(Character character, string text, string customVoice, int customRate, string msgType = "Default")
@@ -451,7 +513,15 @@ public static class TTSManager
             return;
         }
 
-        SendTTSRequest(character, text, voice, Settings.BaseRate + customRate, Settings.GlobalVolume, msgType, distance);
+        int finalRate = Settings.BaseRate + customRate;
+        int finalVolume = Settings.GlobalVolume;
+        int finalBoost = Settings.VolumeBoost;
+        string finalMsgType = msgType;
+
+        ParseEmotions(text, ref finalBoost);
+        CheckCharacterState(character, ref finalRate, ref finalBoost, ref finalMsgType);
+
+        SendTTSRequest(character, text, voice, finalRate, finalVolume, finalMsgType, distance, finalBoost);
     }
 
     public static void Initialize()
