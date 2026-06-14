@@ -9,13 +9,14 @@ Networking.Receive("TTS_VOICE_SYNC", function(msg)
     local pitch = msg.ReadInt16()
     local speed = msg.ReadInt16()
     local voiceName = msg.ReadString()
-    CustomVoices[charId] = {pitch = pitch, speed = speed, voice = voiceName}
+    local engineName = msg.ReadString()
+    CustomVoices[charId] = {pitch = pitch, speed = speed, voice = voiceName, engine = engineName}
 end)
 
-_G.SendMyVoiceSettings = function(pitch, speed, voice)
+_G.SendMyVoiceSettings = function(pitch, speed, voice, engine)
     if not Character.Controlled then return end
     -- Set locally too
-    CustomVoices[Character.Controlled.ID] = {pitch = pitch, speed = speed, voice = voice}
+    CustomVoices[Character.Controlled.ID] = {pitch = pitch, speed = speed, voice = voice, engine = engine}
     
     if Game.Client then
         local msg = Networking.Start("TTS_VOICE_SYNC")
@@ -23,6 +24,7 @@ _G.SendMyVoiceSettings = function(pitch, speed, voice)
         msg.WriteInt16(pitch)
         msg.WriteInt16(speed)
         msg.WriteString(voice)
+        msg.WriteString(engine)
         Networking.Send(msg)
     end
 end
@@ -61,7 +63,7 @@ Hook.Patch("Barotrauma.ChatBox", "AddMessage", function(instance, ptable)
     local msgTypeStr = tostring(chatMsg.Type)
     if character and CustomVoices[character.ID] then
         if ttsManager.SpeakWithCustom then
-            ttsManager.SpeakWithCustom(character, text, CustomVoices[character.ID].voice or "baya", CustomVoices[character.ID].speed, msgTypeStr)
+            ttsManager.SpeakWithCustom(character, text, CustomVoices[character.ID].voice or "baya", CustomVoices[character.ID].speed, msgTypeStr, CustomVoices[character.ID].engine or "")
         else
             ttsManager.Speak(character, text, msgTypeStr)
         end
@@ -86,7 +88,7 @@ Hook.Add("think", "TTSModThink", function()
             if Character.Controlled.ID ~= lastSentCharId then
                 lastSentCharId = Character.Controlled.ID
                 if ttsManager then
-                    _G.SendMyVoiceSettings(ttsManager.MyPitch, ttsManager.MySpeed, ttsManager.VoiceName)
+                    _G.SendMyVoiceSettings(ttsManager.MyPitch, ttsManager.MySpeed, ttsManager.VoiceName, ttsManager.TTSEngine)
                 end
             end
         else

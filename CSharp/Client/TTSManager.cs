@@ -64,6 +64,7 @@ public class TTSSettings
     public int MyPitch = 0;
     public int MySpeed = 0;
     public string VoiceName = "";
+    public string TTSEngine = "silero";
     public bool DebugLogging = false;
     public bool EnableBotTTS = true;
     public int SampleRate = 24000;
@@ -107,6 +108,11 @@ public static class TTSManager
     { 
         get => Settings.VoiceName; 
         set { Settings.VoiceName = value; SaveSettings(); }
+    }
+    public static string TTSEngine 
+    { 
+        get => Settings.TTSEngine; 
+        set { Settings.TTSEngine = value; SaveSettings(); }
     }
     public static bool DebugLogging 
     { 
@@ -220,17 +226,18 @@ public static class TTSManager
 
     public static List<string> GetAvailableVoices()
     {
-        return new List<string> { "aidar", "baya", "kseniya", "xenia", "eugene", "en_0", "en_1", "en_2", "en_3", "en_4", "en_5" };
+        return new List<string> { "aidar", "baya", "kseniya", "xenia", "eugene", "ru_ruslan", "ru_denis", "en_0", "en_1", "en_2", "en_3", "en_4", "en_5", "en_6", "en_7", "en_13", "en_15", "en_22" };
     }
 
-    private static void SendTTSRequest(Character character, string text, string voice, int rate, int volume, string msgType, float distance, int volumeBoost)
+    private static void SendTTSRequest(Character character, string text, string voice, int rate, int volume, string msgType, float distance, int volumeBoost, string engine = "")
     {
         System.Threading.Tasks.Task.Run(async () =>
         {
             try
             {
+                string finalEngine = string.IsNullOrEmpty(engine) ? Settings.TTSEngine : engine;
                 string escapedText = text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r");
-                string json = $"{{\"text\":\"{escapedText}\",\"voice\":\"{voice}\",\"rate\":{rate},\"volume\":{volume},\"boost\":{volumeBoost},\"msg_type\":\"{msgType}\",\"distance\":{distance.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"sample_rate\":{Settings.SampleRate}}}";
+                string json = $"{{\"text\":\"{escapedText}\",\"voice\":\"{voice}\",\"rate\":{rate},\"volume\":{volume},\"boost\":{volumeBoost},\"msg_type\":\"{msgType}\",\"distance\":{distance.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"sample_rate\":{Settings.SampleRate},\"engine\":\"{finalEngine}\"}}";
                 var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
 
                 using (var client = new System.Net.Http.HttpClient())
@@ -493,7 +500,7 @@ public static class TTSManager
         SendTTSRequest(character, text, voice, finalRate, finalVolume, finalMsgType, distance, finalBoost);
     }
 
-    public static void SpeakWithCustom(Character character, string text, string customVoice, int customRate, string msgType = "Default")
+    public static void SpeakWithCustom(Character character, string text, string customVoice, int customRate, string msgType = "Default", string customEngine = "")
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         if (character != null && character.IsBot && !Settings.EnableBotTTS) return;
@@ -521,7 +528,7 @@ public static class TTSManager
         ParseEmotions(text, ref finalBoost);
         CheckCharacterState(character, ref finalRate, ref finalBoost, ref finalMsgType);
 
-        SendTTSRequest(character, text, voice, finalRate, finalVolume, finalMsgType, distance, finalBoost);
+        SendTTSRequest(character, text, voice, finalRate, finalVolume, finalMsgType, distance, finalBoost, customEngine);
     }
 
     public static void Initialize()
@@ -894,6 +901,20 @@ public static class TTSModMenu
                 var perfBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.46f), layout.RectTransform), style: "InnerFrame");
                 var perfLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.9f), perfBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.05f };
 
+                var engineRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.3f), perfLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+                string engineTxt = isRussian ? "Движок TTS:" : "TTS Engine:";
+                new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), engineRow.RectTransform), engineTxt, textAlignment: Alignment.CenterLeft);
+                var engineDrop = new GUIDropDown(new RectTransform(new Vector2(0.5f, 1f), engineRow.RectTransform), "Engine", 2);
+                engineDrop.AddItem(isRussian ? "Silero (Быстро)" : "Silero (Fast)", "silero");
+                engineDrop.AddItem(isRussian ? "Piper (Реалистично)" : "Piper (Realistic)", "piper");
+                
+                engineDrop.SelectItem(TTSManager.TTSEngine);
+                engineDrop.OnSelected = (c, o) => { 
+                    if (o is string e) TTSManager.TTSEngine = e; 
+                    return true; 
+                };
+                engineDrop.ToolTip = isRussian ? "Silero генерирует чуть более 'роботизированный' голос. Piper работает на CPU и звучит реалистичнее." : "Silero is older and runs fast. Piper runs on CPU and sounds much more natural.";
+
                 var qualRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.3f), perfLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
                 string qualTxt = isRussian ? "Качество голоса:" : "Voice Quality:";
                 new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), qualRow.RectTransform), qualTxt, textAlignment: Alignment.CenterLeft);
@@ -938,15 +959,67 @@ public static class TTSModMenu
                 var voiceContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.2f), voiceLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
                 new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), voiceContainer.RectTransform), isRussian ? "Мой голос (Модель): " : "My Voice Model: ", textAlignment: Alignment.CenterLeft);
                 var voiceDropdown = new GUIDropDown(new RectTransform(new Vector2(0.5f, 1f), voiceContainer.RectTransform), "Select Voice", 5);
-                var voices = TTSManager.GetAvailableVoices();
-                foreach (var v in voices) { voiceDropdown.AddItem(v, v); }
-                if (!string.IsNullOrEmpty(TTSManager.VoiceName) && voices.Contains(TTSManager.VoiceName))
-                    voiceDropdown.SelectItem(TTSManager.VoiceName);
-                else if (voices.Count > 0)
-                    voiceDropdown.SelectItem(voices[0]);
+                
+                if (TTSManager.TTSEngine == "piper") {
+                    if (isRussian) {
+                        voiceDropdown.AddItem("=== РУССКИЕ (Piper) ===", "");
+                        voiceDropdown.AddItem("Дмитрий (Мужской 1)", "aidar");
+                        voiceDropdown.AddItem("Денис (Мужской 2)", "ru_denis");
+                        voiceDropdown.AddItem("Руслан (Мужской 3)", "ru_ruslan");
+                        voiceDropdown.AddItem("Ирина (Женский)", "xenia");
+                    } else {
+                        voiceDropdown.AddItem("=== ENGLISH (Piper) ===", "");
+                        voiceDropdown.AddItem("Arctic Male 1", "en_0");
+                        voiceDropdown.AddItem("Arctic Male 2", "en_1");
+                        voiceDropdown.AddItem("Arctic Male 3", "en_2");
+                        voiceDropdown.AddItem("Arctic Male 4", "en_6");
+                        voiceDropdown.AddItem("Arctic Male 5", "en_7");
+                        voiceDropdown.AddItem("Arctic Female 1", "en_4");
+                        voiceDropdown.AddItem("Arctic Female 2", "en_5");
+                    }
+                } else {
+                    if (isRussian) {
+                        voiceDropdown.AddItem("=== РУССКИЕ (Silero) ===", "");
+                        voiceDropdown.AddItem("Мужской 1 (aidar)", "aidar");
+                        voiceDropdown.AddItem("Мужской 2 (eugene)", "eugene");
+                        voiceDropdown.AddItem("Женский 1 (xenia)", "xenia");
+                        voiceDropdown.AddItem("Женский 2 (baya)", "baya");
+                        voiceDropdown.AddItem("Женский 3 (kseniya)", "kseniya");
+                    } else {
+                        voiceDropdown.AddItem("=== ENGLISH (Silero) ===", "");
+                        voiceDropdown.AddItem("Male 1 (en_13)", "en_13");
+                        voiceDropdown.AddItem("Male 2 (en_15)", "en_15");
+                        voiceDropdown.AddItem("Male 3 (en_22)", "en_22");
+                        voiceDropdown.AddItem("Female 1 (en_0)", "en_0");
+                        voiceDropdown.AddItem("Female 2 (en_4)", "en_4");
+                        voiceDropdown.AddItem("Female 3 (en_5)", "en_5");
+                    }
+                }
+
+                List<string> ruVoices = new List<string> { "aidar", "eugene", "xenia", "baya", "kseniya", "ru_ruslan", "ru_denis" };
+                List<string> enPiperVoices = new List<string> { "en_0", "en_1", "en_2", "en_4", "en_5", "en_6", "en_7" };
+                List<string> enSileroVoices = new List<string> { "en_13", "en_15", "en_22", "en_0", "en_4", "en_5" };
+
+                if (string.IsNullOrEmpty(TTSManager.VoiceName)) TTSManager.VoiceName = "aidar";
+
+                if (isRussian) {
+                    if (!ruVoices.Contains(TTSManager.VoiceName)) TTSManager.VoiceName = "aidar";
+                } else {
+                    var enVoices = TTSManager.TTSEngine == "piper" ? enPiperVoices : enSileroVoices;
+                    if (!enVoices.Contains(TTSManager.VoiceName)) {
+                        TTSManager.VoiceName = TTSManager.TTSEngine == "piper" ? "en_0" : "en_13";
+                    }
+                }
+
+                voiceDropdown.SelectItem(TTSManager.VoiceName);
                     
                 voiceDropdown.OnSelected = (component, obj) => {
-                    TTSManager.VoiceName = obj as string;
+                    if (obj is string s && !string.IsNullOrEmpty(s)) {
+                        TTSManager.VoiceName = s;
+                    } else {
+                        // Revert selection if header clicked
+                        voiceDropdown.SelectItem(TTSManager.VoiceName);
+                    }
                     return true;
                 };
                 voiceDropdown.ToolTip = isRussian ? "Выберите модель голоса, которой будет говорить ваш персонаж в игре." : "Choose the voice model your character will use in-game.";

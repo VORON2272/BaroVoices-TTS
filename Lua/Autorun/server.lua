@@ -9,8 +9,9 @@ Networking.Receive("TTS_VOICE_SYNC", function(msg, senderClient)
     local pitch = msg.ReadInt16()
     local speed = msg.ReadInt16()
     local voiceName = msg.ReadString()
+    local engineName = msg.ReadString()
     
-    VoiceCache[charId] = {pitch = pitch, speed = speed, voiceName = voiceName}
+    VoiceCache[charId] = {pitch = pitch, speed = speed, voiceName = voiceName, engine = engineName}
     
     -- Relay to all other clients
     local outMsg = Networking.Start("TTS_VOICE_SYNC")
@@ -18,6 +19,7 @@ Networking.Receive("TTS_VOICE_SYNC", function(msg, senderClient)
     outMsg.WriteInt16(pitch)
     outMsg.WriteInt16(speed)
     outMsg.WriteString(voiceName)
+    outMsg.WriteString(engineName)
     
     for c in Client.ClientList do
         if c ~= senderClient then
@@ -33,6 +35,7 @@ Networking.Receive("TTS_REQUEST_SYNC", function(msg, senderClient)
         outMsg.WriteInt16(data.pitch)
         outMsg.WriteInt16(data.speed)
         outMsg.WriteString(data.voiceName)
+        outMsg.WriteString(data.engine or "silero")
         Networking.Send(outMsg, senderClient.Connection)
     end
 end)
