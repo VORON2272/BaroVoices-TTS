@@ -97,7 +97,7 @@ if defined SAVED_VENV (
 ) else (
     if exist ".venv\Scripts\python.exe" set "PYTHON_EXE=.venv\Scripts\python.exe"
 )
-"%PYTHON_EXE%" silero_server.py %LANG% %DEVICE_ARG%
+"%PYTHON_EXE%" Server\silero_server.py %LANG% %DEVICE_ARG%
 pause
 exit
 
@@ -166,6 +166,6 @@ echo %MSG_DONE%
 echo ==============================================
 set "SETUP_DEVICE=cpu"
 if "%inst_mode%"=="2" set "SETUP_DEVICE=gpu"
-"%VENV_DIR%\Scripts\python.exe" silero_server.py %LANG% %SETUP_DEVICE%
+"%VENV_DIR%\Scripts\python.exe" Server\silero_server.py %LANG% %SETUP_DEVICE%
 pause
 exit

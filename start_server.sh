@@ -88,7 +88,7 @@ if [ "$mode" == "1" ] || [ "$mode" == "2" ]; then
     elif [ -f ".venv/bin/python" ]; then
         PYTHON_EXE=".venv/bin/python"
     fi
-    "$PYTHON_EXE" silero_server.py "$LANG_ARG" "$DEVICE_ARG"
+    "$PYTHON_EXE" Server/silero_server.py "$LANG_ARG" "$DEVICE_ARG"
     read -p "$MSG_PRESS"
     exit 0
 fi
@@ -152,5 +152,5 @@ echo "$MSG_DONE"
 echo "=============================================="
 SETUP_DEVICE="cpu"
 if [ "$inst_mode" == "2" ]; then SETUP_DEVICE="gpu"; fi
-"$VENV_DIR/bin/python" silero_server.py "$LANG_ARG" "$SETUP_DEVICE"
+"$VENV_DIR/bin/python" Server/silero_server.py "$LANG_ARG" "$SETUP_DEVICE"
 read -p "$MSG_PRESS"
