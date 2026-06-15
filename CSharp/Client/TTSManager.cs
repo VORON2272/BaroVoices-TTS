@@ -217,6 +217,34 @@ public static class TTSManager
 
                         if (msgType == "MuffledLocal") isMuffled = true;
 
+                        if (character.AnimController != null && character.AnimController.HeadInWater)
+                        {
+                            bool hasSuit = false;
+                            try
+                            {
+                                if (character.Inventory != null)
+                                {
+                                    foreach (var item in character.Inventory.AllItems)
+                                    {
+                                        if (item != null && character.HasEquippedItem(item))
+                                        {
+                                            if (item.HasTag("divingsuit") || item.HasTag("deepdiving") || item.HasTag("deepdivinglarge"))
+                                            {
+                                                hasSuit = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            catch { }
+
+                            if (!hasSuit)
+                            {
+                                isMuffled = true;
+                            }
+                        }
+
                         channel.Muffled = isMuffled;
                     }
                 }
@@ -266,6 +294,14 @@ public static class TTSManager
     public static bool IsServerRunning = false;
     public static GUITextBlock StatusLabelRef = null;
     public static bool IsRussianLanguage = false;
+    public static bool IsChineseLanguage = false;
+
+    public static string GetLoc(string ru, string zh, string en)
+    {
+        if (IsRussianLanguage) return ru;
+        if (IsChineseLanguage) return zh;
+        return en;
+    }
     private static float checkServerTimer = 0f;
 
     public static async void CheckServerStatusAsync()
@@ -586,6 +622,7 @@ public static class TTSManager
                         if (k == "DebugLogging" && bool.TryParse(v, out bool dl)) Settings.DebugLogging = dl;
                         if (k == "EnableBotTTS" && bool.TryParse(v, out bool ebt)) Settings.EnableBotTTS = ebt;
                         if (k == "SampleRate" && int.TryParse(v, out int sr)) Settings.SampleRate = sr;
+                        if (k == "TTSEngine") Settings.TTSEngine = v;
                     }
                 }
             }
@@ -614,7 +651,8 @@ public static class TTSManager
                 "VoiceName=" + Settings.VoiceName,
                 "DebugLogging=" + Settings.DebugLogging,
                 "EnableBotTTS=" + Settings.EnableBotTTS,
-                "SampleRate=" + Settings.SampleRate
+                "SampleRate=" + Settings.SampleRate,
+                "TTSEngine=" + Settings.TTSEngine
             };
             System.IO.File.WriteAllLines("TTSModSettings.txt", lines);
         }
@@ -732,6 +770,7 @@ public static class TTSModMenu
             };
 
             bool isRussian = false;
+            bool isChinese = false;
             try
             {
                 var settingsProp = typeof(GameMain).Assembly.GetType("Barotrauma.GameSettings")?.GetProperty("CurrentConfig");
@@ -739,17 +778,23 @@ public static class TTSModMenu
                 {
                     var config = settingsProp.GetValue(null);
                     var lang = config?.GetType().GetProperty("Language")?.GetValue(config) ?? config?.GetType().GetField("Language")?.GetValue(config);
-                    if (lang != null && lang.ToString().ToLower().Contains("ru")) isRussian = true;
+                    if (lang != null)
+                    {
+                        string langStr = lang.ToString().ToLower();
+                        if (langStr.Contains("ru")) isRussian = true;
+                        if (langStr.Contains("chinese") || langStr.Contains("zh")) isChinese = true;
+                    }
                 }
             }
             catch { }
             TTSManager.IsRussianLanguage = isRussian;
+            TTSManager.IsChineseLanguage = isChinese;
 
-            string tabGameplay = isRussian ? "Геймплей" : "Gameplay";
-            string tabServer = isRussian ? "Оптимизация" : "Server & Perf";
-            string tabPersonal = isRussian ? "Мой голос" : "My Voice";
-            string titleText = isRussian ? "Настройки TTS" : "BaroVoices TTS";
-            string closeText = isRussian ? "Закрыть" : "Close";
+            string tabGameplay = TTSManager.GetLoc("Геймплей", "游戏玩法", "Gameplay");
+            string tabServer = TTSManager.GetLoc("Оптимизация", "优化与服务器", "Server & Perf");
+            string tabPersonal = TTSManager.GetLoc("Мой голос", "我的声音", "My Voice");
+            string titleText = TTSManager.GetLoc("Настройки TTS", "语音设置 (TTS)", "BaroVoices TTS");
+            string closeText = TTSManager.GetLoc("Закрыть", "关闭", "Close");
 
             var tabBar = new GUILayoutGroup(new RectTransform(new Vector2(0.3f, 1f), mainHorizontal.RectTransform))
             {
@@ -768,14 +813,14 @@ public static class TTSModMenu
 
                 new GUITextBlock(new RectTransform(new Vector2(1f, 0.06f), layout.RectTransform), tabGameplay, textAlignment: Alignment.Center);
                 
-                string hint1 = isRussian ? "Настройки геймплея. Действуют на всех игроков." : "Gameplay settings. Apply to all players.";
+                string hint1 = TTSManager.GetLoc("Настройки геймплея. Действуют на всех игроков.", "游戏设置。适用于所有玩家。", "Gameplay settings. Apply to all players.");
                 new GUITextBlock(new RectTransform(new Vector2(1f, 0.10f), layout.RectTransform), hint1, textAlignment: Alignment.TopCenter, wrap: true) { TextColor = Color.LightCyan };
 
                 var audioBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.70f), layout.RectTransform), style: "InnerFrame");
                 var audioLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.9f), audioBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.03f };
 
                 var volContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.15f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string volTxt = isRussian ? "Общая Громкость: " : "Global Volume: ";
+                string volTxt = TTSManager.GetLoc("Общая Громкость: ", "全局音量：", "Global Volume: ");
                 var volLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), volContainer.RectTransform), volTxt + TTSManager.GlobalVolume + "%", textAlignment: Alignment.CenterLeft);
                 var volumeScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), volContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
                 {
@@ -787,10 +832,10 @@ public static class TTSModMenu
                     volLabel.Text = volTxt + TTSManager.GlobalVolume + "%";
                     return true; 
                 };
-                volumeScroll.ToolTip = isRussian ? "Общая громкость мода. 100% = нормальная громкость в игре." : "Global mod volume. 100% = normal in-game volume.";
+                volumeScroll.ToolTip = TTSManager.GetLoc("Общая громкость мода. 100% = нормальная громкость в игре.", "全局模组音量。100% = 游戏正常音量。", "Global mod volume. 100% = normal in-game volume.");
 
                 var boostContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.15f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string boostTxt = isRussian ? "Усиление (Boost): " : "Volume Boost: ";
+                string boostTxt = TTSManager.GetLoc("Усиление (Boost): ", "音量增强 (Boost)：", "Volume Boost: ");
                 var boostLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), boostContainer.RectTransform), boostTxt + TTSManager.VolumeBoost + "%", textAlignment: Alignment.CenterLeft);
                 var boostScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), boostContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
                 {
@@ -802,10 +847,10 @@ public static class TTSModMenu
                     boostLabel.Text = boostTxt + TTSManager.VolumeBoost + "%";
                     return true; 
                 };
-                boostScroll.ToolTip = isRussian ? "Усиление звука до 500% (полезно, если голоса кажутся слишком тихими)." : "Boosts audio up to 500% (useful if voices are too quiet).";
+                boostScroll.ToolTip = TTSManager.GetLoc("Усиление звука до 500% (полезно, если голоса кажутся слишком тихими).", "将音量增强至最多500%（如果声音太小很有用）。", "Boosts audio up to 500% (useful if voices are too quiet).");
 
                 var speedContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.15f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string spdTxt = isRussian ? "Базовая скорость: " : "Base Speed: ";
+                string spdTxt = TTSManager.GetLoc("Базовая скорость: ", "基础语速：", "Base Speed: ");
                 var speedLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), speedContainer.RectTransform), spdTxt + TTSManager.BaseRate, textAlignment: Alignment.CenterLeft);
                 var speedScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), speedContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
                 {
@@ -817,15 +862,15 @@ public static class TTSModMenu
                     speedLabel.Text = spdTxt + TTSManager.BaseRate;
                     return true; 
                 };
-                speedScroll.ToolTip = isRussian ? "Скорость чтения для всех персонажей. 0 = нормальная." : "Base reading speed for all characters. 0 = normal.";
+                speedScroll.ToolTip = TTSManager.GetLoc("Скорость чтения для всех персонажей. 0 = нормальная.", "所有角色的基础阅读速度。0 = 正常。", "Base reading speed for all characters. 0 = normal.");
 
                 var checksRow1 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.15f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
 
-                string uniqTxt = isRussian ? "Авто-выбор голосов" : "Auto-assign voices";
+                string uniqTxt = TTSManager.GetLoc("Авто-выбор голосов", "自动分配声音", "Auto-assign voices");
                 var uniqueBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow1.RectTransform), uniqTxt)
                 {
                     Selected = TTSManager.EnableUniqueVoices,
-                    ToolTip = isRussian ? "Боты и другие игроки получат случайный подходящий им голос." : "Assigns a random fitting voice to bots/players."
+                    ToolTip = TTSManager.GetLoc("Боты и другие игроки получат случайный подходящий им голос.", "为机器人/玩家分配随机合适的声音。", "Assigns a random fitting voice to bots/players.")
                 };
                 uniqueBox.OnSelected = (tickBox) => 
                 { 
@@ -833,10 +878,10 @@ public static class TTSModMenu
                     return true; 
                 };
 
-                var botBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow1.RectTransform), isRussian ? "Озвучка Ботов" : "Enable Bot TTS")
+                var botBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow1.RectTransform), TTSManager.GetLoc("Озвучка Ботов", "启用机器人语音 (TTS)", "Enable Bot TTS"))
                 {
                     Selected = TTSManager.EnableBotTTS,
-                    ToolTip = isRussian ? "Нужно ли озвучивать фразы ИИ ботов (экипажа, бандитов)." : "Should AI bot dialogues be generated and played."
+                    ToolTip = TTSManager.GetLoc("Нужно ли озвучивать фразы ИИ ботов (экипажа, бандитов).", "是否生成并播放AI机器人的对话。", "Should AI bot dialogues be generated and played.")
                 };
                 botBox.OnSelected = (tickBox) => 
                 { 
@@ -852,17 +897,17 @@ public static class TTSModMenu
 
                 new GUITextBlock(new RectTransform(new Vector2(1f, 0.06f), layout.RectTransform), tabServer, textAlignment: Alignment.Center);
                 
-                string hint1 = isRussian ? "Сервер, производительность и качество голоса." : "Server, performance and quality settings.";
+                string hint1 = TTSManager.GetLoc("Сервер, производительность и качество голоса.", "服务器、性能和音质设置。", "Server, performance and quality settings.");
                 new GUITextBlock(new RectTransform(new Vector2(1f, 0.10f), layout.RectTransform), hint1, textAlignment: Alignment.TopCenter, wrap: true) { TextColor = Color.LightCyan };
 
                 var serverBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.28f), layout.RectTransform), style: "InnerFrame");
                 var serverLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.9f), serverBlock.RectTransform, Anchor.Center), isHorizontal: false) { RelativeSpacing = 0.05f };
-                string statusPrefix = isRussian ? "Статус Сервера TTS: " : "TTS Server Status: ";
+                string statusPrefix = TTSManager.GetLoc("Статус Сервера TTS: ", "TTS 服务器状态：", "TTS Server Status: ");
                 var statusLabel = new GUITextBlock(new RectTransform(new Vector2(1f, 0.4f), serverLayout.RectTransform), statusPrefix + TTSManager.ServerStatusText, textAlignment: Alignment.Center);
                 statusLabel.TextColor = TTSManager.IsServerRunning ? Color.LimeGreen : Color.Tomato;
                 TTSManager.StatusLabelRef = statusLabel;
 
-                string startBtnTxt = isRussian ? "► ЗАПУСТИТЬ СЕРВЕР" : "► START SERVER";
+                string startBtnTxt = TTSManager.GetLoc("► ЗАПУСТИТЬ СЕРВЕР", "► 启动服务器", "► START SERVER");
                 var startBtn = new GUIButton(new RectTransform(new Vector2(0.7f, 0.45f), serverLayout.RectTransform, Anchor.TopCenter), startBtnTxt, Alignment.Center, "GUIButton");
                 startBtn.TextColor = Color.LightGreen;
                 startBtn.OnClicked = (btn, ud) =>
@@ -874,7 +919,7 @@ public static class TTSModMenu
                         string modPath = TTSManager.GetScriptPath(scriptName);
                         if (System.IO.File.Exists(modPath))
                         {
-                            string langArg = TTSManager.IsRussianLanguage ? "ru" : "en";
+                            string langArg = TTSManager.IsRussianLanguage ? "ru" : (TTSManager.IsChineseLanguage ? "zh" : "en");
                             if (isLinux)
                             {
                                 System.Diagnostics.Process.Start(new ProcessStartInfo
@@ -888,7 +933,7 @@ public static class TTSModMenu
                             {
                                 System.Diagnostics.Process.Start("cmd.exe", $"/c start \"\" \"{System.IO.Path.GetFullPath(modPath)}\" {langArg}");
                             }
-                            startBtn.Text = isRussian ? "Запускается..." : "Starting...";
+                            startBtn.Text = TTSManager.GetLoc("Запускается...", "正在启动...", "Starting...");
                         }
                     }
                     catch (Exception ex)
@@ -902,39 +947,51 @@ public static class TTSModMenu
                 var perfLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.9f), perfBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.05f };
 
                 var engineRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.3f), perfLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string engineTxt = isRussian ? "Движок TTS:" : "TTS Engine:";
+                string engineTxt = TTSManager.GetLoc("Движок TTS:", "TTS 引擎：", "TTS Engine:");
                 new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), engineRow.RectTransform), engineTxt, textAlignment: Alignment.CenterLeft);
                 var engineDrop = new GUIDropDown(new RectTransform(new Vector2(0.5f, 1f), engineRow.RectTransform), "Engine", 2);
-                engineDrop.AddItem(isRussian ? "Silero (Быстро)" : "Silero (Fast)", "silero");
-                engineDrop.AddItem(isRussian ? "Piper (Реалистично)" : "Piper (Realistic)", "piper");
+                engineDrop.AddItem(TTSManager.GetLoc("Silero (Быстро)", "Silero (快速)", "Silero (Fast)"), "silero");
+                engineDrop.AddItem(TTSManager.GetLoc("Piper (Реалистично)", "Piper (逼真)", "Piper (Realistic)"), "piper");
                 
+
                 engineDrop.SelectItem(TTSManager.TTSEngine);
+
+                var engineWarningLabel = new GUITextBlock(new RectTransform(new Vector2(1f, 0.2f), perfLayout.RectTransform), "Silero TTS 不支持中文。请选择 Piper TTS引擎。", textAlignment: Alignment.Center)
+                {
+                    TextColor = Color.Red,
+                    Visible = TTSManager.IsChineseLanguage && TTSManager.TTSEngine == "silero"
+                };
+
                 engineDrop.OnSelected = (c, o) => { 
-                    if (o is string e) TTSManager.TTSEngine = e; 
+                    if (o is string e) {
+                        TTSManager.TTSEngine = e; 
+                        engineWarningLabel.Visible = TTSManager.IsChineseLanguage && e == "silero";
+                    }
                     return true; 
                 };
-                engineDrop.ToolTip = isRussian ? "Silero генерирует чуть более 'роботизированный' голос. Piper работает на CPU и звучит реалистичнее." : "Silero is older and runs fast. Piper runs on CPU and sounds much more natural.";
+
+                engineDrop.ToolTip = TTSManager.GetLoc("Silero генерирует чуть более 'роботизированный' голос. Piper работает на CPU и звучит реалистичнее.", "Silero生成速度较快。Piper在CPU上运行，声音更自然。", "Silero is older and runs fast. Piper runs on CPU and sounds much more natural.");
 
                 var qualRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.3f), perfLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string qualTxt = isRussian ? "Качество голоса:" : "Voice Quality:";
+                string qualTxt = TTSManager.GetLoc("Качество голоса:", "音质：", "Voice Quality:");
                 new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), qualRow.RectTransform), qualTxt, textAlignment: Alignment.CenterLeft);
                 var qualDrop = new GUIDropDown(new RectTransform(new Vector2(0.5f, 1f), qualRow.RectTransform), "Quality", 3);
-                qualDrop.AddItem(isRussian ? "Высокое (48000 Hz)" : "High (48000 Hz)", 48000);
-                qualDrop.AddItem(isRussian ? "Баланс (24000 Hz)" : "Balanced (24000 Hz)", 24000);
-                qualDrop.AddItem(isRussian ? "Рация (8000 Hz)" : "Radio (8000 Hz)", 8000);
+                qualDrop.AddItem(TTSManager.GetLoc("Высокое (48000 Hz)", "高音质 (48000 Hz)", "High (48000 Hz)"), 48000);
+                qualDrop.AddItem(TTSManager.GetLoc("Баланс (24000 Hz)", "平衡 (24000 Hz)", "Balanced (24000 Hz)"), 24000);
+                qualDrop.AddItem(TTSManager.GetLoc("Рация (8000 Hz)", "无线电 (8000 Hz)", "Radio (8000 Hz)"), 8000);
                 
                 qualDrop.SelectItem(TTSManager.SampleRate);
                 qualDrop.OnSelected = (c, o) => { 
                     if (o is int sr) TTSManager.SampleRate = sr; 
                     return true; 
                 };
-                qualDrop.ToolTip = isRussian ? "Влияет на чистоту звука. 48000 Hz требует больше ресурсов процессора, но голос менее 'роботизированный'." : "Affects clarity. 48000 Hz uses more CPU but sounds less robotic.";
+                qualDrop.ToolTip = TTSManager.GetLoc("Влияет на чистоту звука. 48000 Hz требует больше ресурсов процессора, но голос менее 'роботизированный'.", "影响清晰度。48000 Hz 占用更多CPU，但声音不那么死板。", "Affects clarity. 48000 Hz uses more CPU but sounds less robotic.");
 
                 var checksRow2 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.3f), perfLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
                 var debugBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow2.RectTransform), "Debug Logging")
                 {
                     Selected = TTSManager.DebugLogging,
-                    ToolTip = isRussian ? "Показывать системную информацию мода в консоли игры (F3)." : "Show technical mod logs in the game console (F3)."
+                    ToolTip = TTSManager.GetLoc("Показывать системную информацию мода в консоли игры (F3).", "在游戏控制台 (F3) 中显示技术日志。", "Show technical mod logs in the game console (F3).")
                 };
                 debugBox.OnSelected = (tickBox) => 
                 { 
@@ -950,18 +1007,23 @@ public static class TTSModMenu
 
                 new GUITextBlock(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), tabPersonal, textAlignment: Alignment.Center);
                 
-                string hint2 = isRussian ? "Настрой голос СВОЕГО персонажа!\nОбязательно нажми 'Применить и Отправить', чтобы другие игроки на сервере услышали изменения." : "Customize YOUR character's voice!\nBe sure to click 'Apply & Sync' to share it with other players.";
+                string hint2 = TTSManager.GetLoc("Настрой голос СВОЕГО персонажа!\nОбязательно нажми 'Применить и Отправить', чтобы другие игроки на сервере услышали изменения.", "自定义你的角色声音！\n一定要点击“应用并同步”，与其他玩家分享。", "Customize YOUR character's voice!\nBe sure to click 'Apply & Sync' to share it with other players.");
                 new GUITextBlock(new RectTransform(new Vector2(1f, 0.15f), layout.RectTransform), hint2, textAlignment: Alignment.TopCenter, wrap: true) { TextColor = Color.LightYellow };
 
                 var voiceBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.5f), layout.RectTransform), style: "InnerFrame");
                 var voiceLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.9f, 0.9f), voiceBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.05f };
 
                 var voiceContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.2f), voiceLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), voiceContainer.RectTransform), isRussian ? "Мой голос (Модель): " : "My Voice Model: ", textAlignment: Alignment.CenterLeft);
+                new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), voiceContainer.RectTransform), TTSManager.GetLoc("Мой голос (Модель): ", "我的声音模型：", "My Voice Model: "), textAlignment: Alignment.CenterLeft);
                 var voiceDropdown = new GUIDropDown(new RectTransform(new Vector2(0.5f, 1f), voiceContainer.RectTransform), "Select Voice", 5);
                 
                 if (TTSManager.TTSEngine == "piper") {
-                    if (isRussian) {
+                    if (TTSManager.IsChineseLanguage) {
+                        voiceDropdown.AddItem("=== 中文 (Piper) ===", "");
+                        voiceDropdown.AddItem("华言 (女声)", "zh_huayan");
+                        voiceDropdown.AddItem("小雅 (女声)", "zh_xiao_ya");
+                        voiceDropdown.AddItem("超文 (男声)", "zh_chaowen");
+                    } else if (isRussian) {
                         voiceDropdown.AddItem("=== РУССКИЕ (Piper) ===", "");
                         voiceDropdown.AddItem("Дмитрий (Мужской 1)", "aidar");
                         voiceDropdown.AddItem("Денис (Мужской 2)", "ru_denis");
@@ -997,12 +1059,15 @@ public static class TTSModMenu
                 }
 
                 List<string> ruVoices = new List<string> { "aidar", "eugene", "xenia", "baya", "kseniya", "ru_ruslan", "ru_denis" };
+                List<string> zhVoices = new List<string> { "zh_huayan", "zh_xiao_ya", "zh_chaowen" };
                 List<string> enPiperVoices = new List<string> { "en_0", "en_1", "en_2", "en_4", "en_5", "en_6", "en_7" };
                 List<string> enSileroVoices = new List<string> { "en_13", "en_15", "en_22", "en_0", "en_4", "en_5" };
 
                 if (string.IsNullOrEmpty(TTSManager.VoiceName)) TTSManager.VoiceName = "aidar";
 
-                if (isRussian) {
+                if (TTSManager.IsChineseLanguage && TTSManager.TTSEngine == "piper") {
+                    if (!zhVoices.Contains(TTSManager.VoiceName)) TTSManager.VoiceName = "zh_huayan";
+                } else if (isRussian) {
                     if (!ruVoices.Contains(TTSManager.VoiceName)) TTSManager.VoiceName = "aidar";
                 } else {
                     var enVoices = TTSManager.TTSEngine == "piper" ? enPiperVoices : enSileroVoices;
@@ -1022,10 +1087,10 @@ public static class TTSModMenu
                     }
                     return true;
                 };
-                voiceDropdown.ToolTip = isRussian ? "Выберите модель голоса, которой будет говорить ваш персонаж в игре." : "Choose the voice model your character will use in-game.";
+                voiceDropdown.ToolTip = TTSManager.GetLoc("Выберите модель голоса, которой будет говорить ваш персонаж в игре.", "选择你的角色在游戏中使用的声音模型。", "Choose the voice model your character will use in-game.");
 
                 var speedContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.2f), voiceLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string spdTxt = isRussian ? "Моя скорость речи: " : "My Speech Speed: ";
+                string spdTxt = TTSManager.GetLoc("Моя скорость речи: ", "我的语速：", "My Speech Speed: ");
                 var speedLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), speedContainer.RectTransform), spdTxt + TTSManager.MySpeed, textAlignment: Alignment.CenterLeft);
                 var speedScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), speedContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
                 {
@@ -1037,17 +1102,17 @@ public static class TTSModMenu
                     speedLabel.Text = spdTxt + TTSManager.MySpeed;
                     return true; 
                 };
-                speedScroll.ToolTip = isRussian ? "Индивидуальная скорость вашей речи (прибавляется к базовой)." : "Your personal speaking speed modifier.";
+                speedScroll.ToolTip = TTSManager.GetLoc("Индивидуальная скорость вашей речи (прибавляется к базовой).", "你个人的语速修饰符。", "Your personal speaking speed modifier.");
 
                 new GUITextBlock(new RectTransform(new Vector2(1f, 0.05f), voiceLayout.RectTransform), "");
 
                 var btnLayout = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.25f), voiceLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
                 
-                string prevTxt = isRussian ? "Прослушать" : "Preview";
+                string prevTxt = TTSManager.GetLoc("Прослушать", "试听", "Preview");
                 var previewBtn = new GUIButton(new RectTransform(new Vector2(0.45f, 1f), btnLayout.RectTransform), prevTxt, Alignment.Center, "GUIButton");
                 previewBtn.OnClicked = (btn, ud) =>
                 {
-                    string textToSpeak = isRussian ? "Внимание экипажу! Проверка системы связи, как слышно?" : "Attention crew! Radio comms test, how do you copy?";
+                    string textToSpeak = TTSManager.GetLoc("Внимание экипажу! Проверка системы связи, как слышно?", "全体船员注意！无线电通讯测试，收到请回答？", "Attention crew! Radio comms test, how do you copy?");
                     string myVoice = TTSManager.VoiceName;
                     if (string.IsNullOrEmpty(myVoice)) myVoice = "baya";
                     
@@ -1058,7 +1123,7 @@ public static class TTSModMenu
                     return true;
                 };
 
-                string syncTxt = isRussian ? "Применить и Отправить" : "Apply & Sync";
+                string syncTxt = TTSManager.GetLoc("Применить и Отправить", "应用并同步", "Apply & Sync");
                 var syncBtn = new GUIButton(new RectTransform(new Vector2(0.5f, 1f), btnLayout.RectTransform), syncTxt, Alignment.Center, "GUIButton");
                 syncBtn.TextColor = Color.LightGreen;
                 syncBtn.OnClicked = (btn, ud) =>
@@ -1067,7 +1132,7 @@ public static class TTSModMenu
                     {
                         if (Character.Controlled == null)
                         {
-                            syncBtn.Text = isRussian ? "Только в игре!" : "In-game only!";
+                            syncBtn.Text = TTSManager.GetLoc("Только в игре!", "只能在游戏内同步！", "In-game only!");
                             return true;
                         }
 
@@ -1075,7 +1140,7 @@ public static class TTSModMenu
                         if (string.IsNullOrEmpty(myVoice)) myVoice = "baya";
                         string luaCmd = $"if SendMyVoiceSettings then SendMyVoiceSettings({TTSManager.MyPitch}, {TTSManager.MySpeed}, \"{myVoice}\") end";
                         GameMain.LuaCs.Lua.DoString(luaCmd);
-                        syncBtn.Text = isRussian ? "Успешно отправлено!" : "Synced!";
+                        syncBtn.Text = TTSManager.GetLoc("Успешно отправлено!", "已同步！", "Synced!");
                     }
                     catch (Exception ex)
                     {
@@ -1096,7 +1161,7 @@ public static class TTSModMenu
 
             new GUITextBlock(new RectTransform(new Vector2(1f, 0.10f), tabBar.RectTransform), ""); // Filler
 
-            var supportBtn = new GUIButton(new RectTransform(new Vector2(1f, 0.15f), tabBar.RectTransform), isRussian ? "Поддержать Автора" : "Support Author", Alignment.Center, "GUIButton");
+            var supportBtn = new GUIButton(new RectTransform(new Vector2(1f, 0.15f), tabBar.RectTransform), TTSManager.GetLoc("Поддержать Автора", "支持作者", "Support Author"), Alignment.Center, "GUIButton");
             supportBtn.TextColor = Color.Gold;
             supportBtn.OnClicked = (btn, ud) =>
             {

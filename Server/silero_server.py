@@ -36,62 +36,62 @@ lang_arg = sys.argv[1] if len(sys.argv) > 1 else 'en'
 device_arg = sys.argv[2] if len(sys.argv) > 2 else 'cpu'
 is_ru = (lang_arg == 'ru')
 
-if device_arg != 'cpu' and torch.cuda.is_available():
-    device = torch.device('cuda')
-    print("Используется GPU (CUDA)" if is_ru else "Using GPU (CUDA)")
-else:
-    device = torch.device('cpu')
-    print("Используется CPU" if is_ru else "Using CPU")
-
-total_cores = os.cpu_count() or 4
-threads = max(2, total_cores // 2)
-torch.set_num_threads(threads)
-if is_ru:
-    print(f"Оптимизация: выделено {threads} потоков из {total_cores} для нейросети (остальные свободны для игры).")
-else:
-    print(f"Optimization: allocated {threads} out of {total_cores} CPU threads for TTS.")
-
-model_id = 'v4_ru'
-language = 'ru'
+model_ru = None
+model_en = None
+device = None
+executor = None
+piper_models = {}
 sample_rate = 24000
 
-executor = ThreadPoolExecutor(max_workers=1)
-
-print("Загрузка нейросети Silero TTS... Это может занять несколько минут при первом запуске." if is_ru else "Loading Silero TTS neural network... This may take a few minutes on first run.")
-try:
-    print("Загрузка русской модели v4_ru..." if is_ru else "Loading Russian model v4_ru...")
-    model_ru, _ = torch.hub.load(repo_or_dir='snakers4/silero-models',
-                                         model='silero_tts',
-                                         language='ru',
-                                         speaker='v4_ru',
-                                         trust_repo=True)
-    model_ru.to(device)
+def initialize_server():
+    global model_ru, model_en, device, executor, piper_models
     
-    print("Загрузка английской модели v3_en..." if is_ru else "Loading English model v3_en...")
-    model_en, _ = torch.hub.load(repo_or_dir='snakers4/silero-models',
-                                         model='silero_tts',
-                                         language='en',
-                                         speaker='v3_en',
-                                         trust_repo=True)
-    model_en.to(device)
+    if device_arg != 'cpu' and torch.cuda.is_available():
+        device = torch.device('cuda')
+        print("Используется GPU (CUDA)" if is_ru else "Using GPU (CUDA)")
+    else:
+        device = torch.device('cpu')
+        print("Используется CPU" if is_ru else "Using CPU")
     
-    piper_models = {}
+    total_cores = os.cpu_count() or 4
+    threads = max(2, total_cores // 2)
+    torch.set_num_threads(threads)
+    if is_ru:
+        print(f"Оптимизация: выделено {threads} потоков из {total_cores} для нейросети (остальные свободны для игры).")
+    else:
+        print(f"Optimization: allocated {threads} out of {total_cores} CPU threads for TTS.")
     
-    print("Модели успешно загружены!" if is_ru else "Models loaded successfully!")
-    print("Прогрев нейросетей (это уберет лаг при первой фразе)..." if is_ru else "Warming up neural networks...")
+    executor = ThreadPoolExecutor(max_workers=1)
     
-    def do_warmup():
+    print("Загрузка нейросети Silero TTS... Это может занять несколько минут при первом запуске." if is_ru else "Loading Silero TTS neural network... This may take a few minutes on first run.")
+    try:
+        print("Загрузка русской модели v4_ru..." if is_ru else "Loading Russian model v4_ru...")
+        model_ru, _ = torch.hub.load(repo_or_dir='snakers4/silero-models',
+                                             model='silero_tts',
+                                             language='ru',
+                                             speaker='v4_ru',
+                                             trust_repo=True)
+        model_ru.to(device)
+        
+        print("Загрузка английской модели v3_en..." if is_ru else "Loading English model v3_en...")
+        model_en, _ = torch.hub.load(repo_or_dir='snakers4/silero-models',
+                                             model='silero_tts',
+                                             language='en',
+                                             speaker='v3_en',
+                                             trust_repo=True)
+        model_en.to(device)
+        
+        print("Модели успешно загружены!" if is_ru else "Models loaded successfully!")
+        print("Прогрев нейросетей (это уберет лаг при первой фразе)..." if is_ru else "Warming up neural networks...")
+        
         try:
             model_ru.apply_tts(text="Проверка связи", speaker="baya", sample_rate=sample_rate)
             model_en.apply_tts(text="Testing connection", speaker="en_0", sample_rate=sample_rate)
             print("Прогрев полностью завершен! Сервер готов к мгновенной работе." if is_ru else "Warmup fully complete! Server ready.")
         except Exception:
             pass
-
-    do_warmup()
-
-except Exception as e:
-    print(f"Ошибка загрузки моделей: {e}" if is_ru else f"Error loading models: {e}")
+    except Exception as e:
+        print(f"Ошибка загрузки моделей: {e}" if is_ru else f"Error loading models: {e}")
 
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -102,8 +102,13 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _generate_audio(self, text, speaker, req_sample_rate, boost, msg_type, distance, rate=0, engine='silero'):
         has_cyrillic = bool(re.search('[а-яА-ЯёЁ]', text))
+        has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
         
-        if has_cyrillic:
+        if has_chinese and engine == "piper":
+            active_model = model_en
+            active_speaker = "zh_huayan" if not speaker.startswith("zh_") else speaker
+            lang_label = "ZH"
+        elif has_cyrillic:
             active_model = model_ru
             if speaker.startswith('en_'):
                 if speaker in ['en_13', 'en_15', 'en_22']:
@@ -151,7 +156,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                         os.makedirs(piper_dir)
                         
                     speaker_id = None
-                    if has_cyrillic:
+                    if active_speaker.startswith("zh_"):
+                        short_name = active_speaker.split('_', 1)[1]
+                        model_name = f"zh_CN-{short_name}-medium"
+                        json_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/{short_name}/medium/{model_name}.onnx.json"
+                        onnx_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/{short_name}/medium/{model_name}.onnx"
+                    elif has_cyrillic:
                         if active_speaker in ["aidar"]:
                             model_name = "ru_RU-dmitri-medium"
                         elif active_speaker in ["ru_denis", "eugene"]:
@@ -212,6 +222,23 @@ class RequestHandler(BaseHTTPRequestHandler):
                     audio = active_model.apply_tts(text=text, speaker=active_speaker, sample_rate=req_sample_rate)
             else:
                 audio = active_model.apply_tts(text=text, speaker=active_speaker, sample_rate=req_sample_rate)
+                
+            # Trim trailing silence/sighs from Piper/Silero
+            threshold = 0.005
+            window_size = int(req_sample_rate * 0.02)
+            end_idx = len(audio)
+            for i in range(len(audio) - window_size, 0, -window_size):
+                if audio[i:i+window_size].abs().mean() > threshold:
+                    end_idx = min(len(audio), i + window_size + int(req_sample_rate * 0.05))
+                    break
+            audio = audio[:end_idx]
+                
+            fade_samples = int(req_sample_rate * 0.05) # 50 ms fade
+            if len(audio) > fade_samples * 2:
+                fade = torch.linspace(1.0, 0.0, fade_samples, device=audio.device)
+                audio[-fade_samples:] *= fade
+                audio[:fade_samples] *= fade.flip(0)
+                
             torch.save(audio, cache_path)
             
             try:
@@ -305,4 +332,5 @@ def run(server_class=ThreadingHTTPServer, handler_class=RequestHandler, port=500
     httpd.serve_forever()
 
 if __name__ == '__main__':
+    initialize_server()
     run()

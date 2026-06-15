@@ -6,6 +6,7 @@ set "LANG=%~1"
 if "%LANG%"=="" set "LANG=en"
 
 if "%LANG%"=="ru" goto lang_ru
+if "%LANG%"=="zh" goto lang_zh
 goto lang_en
 
 :lang_ru
@@ -32,6 +33,32 @@ set "MSG_VENV=Создание изолированной среды Python в "
 set "MSG_DL_GPU=Установка GPU PyTorch (CUDA)..."
 set "MSG_DL_CPU=Установка CPU PyTorch..."
 set "MSG_DONE=[TTS] Установка завершена! Запуск Сервера..."
+goto lang_done
+
+:lang_zh
+set "MSG_TITLE=[TTS] 选择操作"
+set "MSG_OPT1=1 - 启动服务器 (CPU / 默认)"
+set "MSG_OPT2=2 - 启动服务器 (NVIDIA GPU)"
+set "MSG_OPT3=3 - 安装/修复环境 (下载Python)"
+set "MSG_PROMPT=输入 1, 2 或 3 并按回车: "
+set "MSG_INVALID=输入无效，默认为 1。"
+set "MSG_STARTING=[TTS] 正在启动服务器..."
+set "MSG_INST_MODE=[TTS] 安装模式"
+set "MSG_INST_CPU=1 - CPU 版本 (标准)"
+set "MSG_INST_GPU=2 - GPU 版本 (需要 NVIDIA CUDA)"
+set "MSG_INST_PROMPT=输入 1 或 2: "
+set "MSG_PATH_TITLE=[TTS] 安装路径设置"
+set "MSG_PATH_1=你想在哪里安装 Python 及其依赖？"
+set "MSG_PATH_2=按 ENTER 使用默认路径 (在模组文件夹内)。"
+set "MSG_PATH_3=自定义路径示例：D:\TTS_Env"
+set "MSG_PATH_PROMPT=输入路径或按 ENTER: "
+set "MSG_INIT=[TTS] 正在初始化环境..."
+set "MSG_INSTALL_UV=正在安装 uv 包管理器..."
+set "MSG_DL_PYTHON=如果没有安装，正在下载便携版 Python 3.11..."
+set "MSG_VENV=正在创建隔离的 Python 环境于 "
+set "MSG_DL_GPU=正在安装 GPU PyTorch (CUDA)..."
+set "MSG_DL_CPU=正在安装 CPU PyTorch..."
+set "MSG_DONE=[TTS] 安装完成！正在启动服务器..."
 goto lang_done
 
 :lang_en
@@ -90,6 +117,7 @@ echo.
 echo ==============================================
 echo %MSG_STARTING%
 echo ==============================================
+set "PYTHONUTF8=1"
 set "PYTHON_EXE=python"
 if exist "venv_path.txt" set /p SAVED_VENV=<venv_path.txt
 if defined SAVED_VENV (
@@ -158,12 +186,13 @@ uv pip install --python "%VENV_DIR%" torch torchaudio --index-url https://downlo
 goto dl_done
 
 :dl_done
-uv pip install --python "%VENV_DIR%" soundfile flask omegaconf piper-tts requests
+uv pip install --python "%VENV_DIR%" soundfile flask omegaconf piper-tts requests g2pw unicode_rbnf sentence_stream
 
 echo.
 echo ==============================================
 echo %MSG_DONE%
 echo ==============================================
+set "PYTHONUTF8=1"
 set "SETUP_DEVICE=cpu"
 if "%inst_mode%"=="2" set "SETUP_DEVICE=gpu"
 "%VENV_DIR%\Scripts\python.exe" Server\silero_server.py %LANG% %SETUP_DEVICE%
