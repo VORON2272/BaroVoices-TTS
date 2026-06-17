@@ -16,6 +16,14 @@ import wave
 import ssl
 
 try:
+    import piper_phonemize
+    espeak_path = os.path.join(os.path.dirname(piper_phonemize.__file__), 'espeak-ng-data')
+    if os.path.exists(espeak_path):
+        os.environ['PIPER_ESPEAKNG_DATA_DIRECTORY'] = espeak_path
+except Exception:
+    pass
+
+try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
     pass
