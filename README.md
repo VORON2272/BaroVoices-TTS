@@ -19,8 +19,8 @@ When you type in the text chat, your character physically speaks it out loud.
 * **Multi-language Support:** Automatically detects and perfectly reads both **English** and **Russian** text.
 * **Immersive Audio Filters:** Audio is processed through Barotrauma's sound engine! Radio messages have static and frequency filters applied, while local chat is muffled through submarine walls and fades with distance.
 * **AI Crew Voices:** Bot crew members are assigned random voices and will speak their autonomous chat lines out loud.
-* **High Performance:** Runs a local Python backend. Supports CPU multithreading and Nvidia GPU (CUDA) acceleration for zero-latency voice generation.
-* **Cross-platform:** Fully supports Windows and Linux (including Dedicated Servers and Steam Deck).
+* **High Performance:** Runs a local Python backend. Supports CPU multithreading, Nvidia GPU (CUDA) acceleration, and Apple Silicon GPU (Metal / MPS) for ultra-low latency voice generation.
+* **Full Cross-platform Support:** Works seamlessly on Windows, Linux (including Steam Deck & Dedicated Servers), and macOS (Apple Silicon M1/M2/M3/M4 & Intel).
 
 ## ⚙️ Installation
 

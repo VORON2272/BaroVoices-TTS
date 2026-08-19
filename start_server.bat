@@ -120,12 +120,15 @@ echo ==============================================
 set "PYTHONUTF8=1"
 set "PYTHON_EXE=python"
 if exist "venv_path.txt" set /p SAVED_VENV=<venv_path.txt
+if defined SAVED_VENV set "SAVED_VENV=%SAVED_VENV:"=%"
+
 if defined SAVED_VENV (
     if exist "%SAVED_VENV%\Scripts\python.exe" set "PYTHON_EXE=%SAVED_VENV%\Scripts\python.exe"
 ) else (
     if exist ".venv\Scripts\python.exe" set "PYTHON_EXE=.venv\Scripts\python.exe"
 )
 "%PYTHON_EXE%" Server\silero_server.py %LANG% %DEVICE_ARG%
+if %errorlevel% neq 0 pause
 pause
 exit
 

@@ -68,11 +68,29 @@ public class TTSSettings
     public bool DebugLogging = false;
     public bool EnableBotTTS = true;
     public int SampleRate = 24000;
+    public bool EnableVoiceQueue = true;
+}
+
+public class QueuedVoiceAudio
+{
+    public Character Character;
+    public byte[] WavBytes;
+    public int Volume;
+    public string MsgType;
+    public float Distance;
 }
 
 public static class TTSManager
 {
     public static TTSSettings Settings { get; private set; } = new TTSSettings();
+
+    private static readonly System.Net.Http.HttpClient httpClient = new System.Net.Http.HttpClient
+    {
+        Timeout = TimeSpan.FromSeconds(20)
+    };
+
+    private static readonly ConcurrentDictionary<Character, ConcurrentQueue<QueuedVoiceAudio>> characterVoiceQueues = new ConcurrentDictionary<Character, ConcurrentQueue<QueuedVoiceAudio>>();
+    private static readonly ConcurrentQueue<QueuedVoiceAudio> globalVoiceQueue = new ConcurrentQueue<QueuedVoiceAudio>();
 
     public static int GlobalVolume 
     { 
@@ -129,6 +147,11 @@ public static class TTSManager
         get => Settings.SampleRate; 
         set { Settings.SampleRate = value; SaveSettings(); }
     }
+    public static bool EnableVoiceQueue 
+    { 
+        get => Settings.EnableVoiceQueue; 
+        set { Settings.EnableVoiceQueue = value; SaveSettings(); }
+    }
 
     private static List<Tuple<Barotrauma.Sounds.SoundChannel, Character, string>> activeVoiceChannels = new List<Tuple<Barotrauma.Sounds.SoundChannel, Character, string>>();
 
@@ -179,13 +202,16 @@ public static class TTSManager
 
                 var msgType = tuple.Item3;
 
-                if (!channel.IsPlaying)
+                if (channel == null || !channel.IsPlaying)
                 {
                     activeVoiceChannels.RemoveAt(i);
                 }
                 else if (character != null && !character.Removed)
                 {
-                    channel.Position = new Vector3(character.WorldPosition.X, character.WorldPosition.Y, 0f);
+                    if (msgType != "Radio")
+                    {
+                        channel.Position = new Vector3(character.WorldPosition.X, character.WorldPosition.Y, 0f);
+                    }
                     
                     if (msgType != "Radio" && Character.Controlled != null)
                     {
@@ -250,6 +276,61 @@ public static class TTSManager
                 }
             }
         }
+
+        if (Settings.EnableVoiceQueue)
+        {
+            var charKeys = new List<Character>(characterVoiceQueues.Keys);
+            foreach (var ch in charKeys)
+            {
+                if (ch == null || ch.Removed)
+                {
+                    characterVoiceQueues.TryRemove(ch, out _);
+                    continue;
+                }
+
+                if (characterVoiceQueues.TryGetValue(ch, out var queue) && !queue.IsEmpty)
+                {
+                    bool isSpeaking = false;
+                    lock (activeVoiceChannels)
+                    {
+                        for (int i = 0; i < activeVoiceChannels.Count; i++)
+                        {
+                            if (activeVoiceChannels[i].Item2 == ch && activeVoiceChannels[i].Item1 != null && activeVoiceChannels[i].Item1.IsPlaying)
+                            {
+                                isSpeaking = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!isSpeaking && queue.TryDequeue(out var nextAudio))
+                    {
+                        PlayWavBytes(nextAudio.Character, nextAudio.WavBytes, nextAudio.Volume, nextAudio.MsgType, nextAudio.Distance);
+                    }
+                }
+            }
+
+            if (!globalVoiceQueue.IsEmpty)
+            {
+                bool isGlobalSpeaking = false;
+                lock (activeVoiceChannels)
+                {
+                    for (int i = 0; i < activeVoiceChannels.Count; i++)
+                    {
+                        if (activeVoiceChannels[i].Item2 == null && activeVoiceChannels[i].Item1 != null && activeVoiceChannels[i].Item1.IsPlaying)
+                        {
+                            isGlobalSpeaking = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!isGlobalSpeaking && globalVoiceQueue.TryDequeue(out var globalAudio))
+                {
+                    PlayWavBytes(globalAudio.Character, globalAudio.WavBytes, globalAudio.Volume, globalAudio.MsgType, globalAudio.Distance);
+                }
+            }
+        }
     }
 
     public static List<string> GetAvailableVoices()
@@ -268,19 +349,39 @@ public static class TTSManager
                 string json = $"{{\"text\":\"{escapedText}\",\"voice\":\"{voice}\",\"rate\":{rate},\"volume\":{volume},\"boost\":{volumeBoost},\"msg_type\":\"{msgType}\",\"distance\":{distance.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"sample_rate\":{Settings.SampleRate},\"engine\":\"{finalEngine}\"}}";
                 var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
 
-                using (var client = new System.Net.Http.HttpClient())
+                var response = await httpClient.PostAsync("http://127.0.0.1:5000/tts", content);
+                if (response.IsSuccessStatusCode)
                 {
-                    client.Timeout = TimeSpan.FromSeconds(30);
-                    var response = await client.PostAsync("http://127.0.0.1:5000/tts", content);
-                    if (response.IsSuccessStatusCode)
+                    byte[] wavBytes = await response.Content.ReadAsByteArrayAsync();
+                    if (Settings.EnableVoiceQueue)
                     {
-                        byte[] wavBytes = await response.Content.ReadAsByteArrayAsync();
-                        PlayWavBytes(character, wavBytes, volume, msgType, distance);
+                        var item = new QueuedVoiceAudio
+                        {
+                            Character = character,
+                            WavBytes = wavBytes,
+                            Volume = volume,
+                            MsgType = msgType,
+                            Distance = distance
+                        };
+
+                        if (character != null)
+                        {
+                            var q = characterVoiceQueues.GetOrAdd(character, _ => new ConcurrentQueue<QueuedVoiceAudio>());
+                            if (q.Count < 5) q.Enqueue(item);
+                        }
+                        else
+                        {
+                            if (globalVoiceQueue.Count < 5) globalVoiceQueue.Enqueue(item);
+                        }
                     }
                     else
                     {
-                        TTSManager.Log("[BaroVoices TTS] HTTP Error: " + response.StatusCode);
+                        PlayWavBytes(character, wavBytes, volume, msgType, distance);
                     }
+                }
+                else
+                {
+                    TTSManager.Log("[BaroVoices TTS] HTTP Error: " + response.StatusCode);
                 }
             }
             catch (Exception e)
@@ -308,13 +409,9 @@ public static class TTSManager
     {
         try
         {
-            using (var client = new System.Net.Http.HttpClient())
-            {
-                client.Timeout = TimeSpan.FromSeconds(1);
-                var response = await client.GetAsync("http://127.0.0.1:5000/voices");
-                IsServerRunning = response.IsSuccessStatusCode;
-                ServerStatusText = IsServerRunning ? (IsRussianLanguage ? "Работает (OK)" : "Running (OK)") : (IsRussianLanguage ? "Не запущен" : "Not running");
-            }
+            var response = await httpClient.GetAsync("http://127.0.0.1:5000/voices");
+            IsServerRunning = response.IsSuccessStatusCode;
+            ServerStatusText = IsServerRunning ? (IsRussianLanguage ? "Работает (OK)" : "Running (OK)") : (IsRussianLanguage ? "Не запущен" : "Not running");
         }
         catch
         {
@@ -334,50 +431,54 @@ public static class TTSManager
             File.WriteAllBytes(tempFile, wavBytes);
 
             int safeVolume = Math.Max(10, volume);
-            TTSManager.Log($"[BaroVoices TTS] PlayWavBytes: Saved temp file {tempFile}. Safe Volume: {safeVolume}");
+            TTSManager.Log($"[BaroVoices TTS] PlayWavBytes: Saved temp file {tempFile}. Volume: {safeVolume}");
 
             var sound = GameMain.SoundManager.LoadSound(tempFile, false);
             if (sound != null)
             {
-                TTSManager.Log("[BaroVoices TTS] Sound loaded. Waiting 200ms before Play()...");
-                Task.Delay(200).ContinueWith(_ => {
+                TTSManager.Log("[BaroVoices TTS] Sound loaded. Waiting 150ms before Play()...");
+                Task.Delay(150).ContinueWith(_ => {
                     try
                     {
                         float gain = (safeVolume / 100f) * 2.5f;
-                        Vector2 pos = character != null ? character.WorldPosition : Vector2.Zero;
-                        var channel = msgType == "Radio" ? sound.Play(gain) : sound.Play(gain, 1500f, pos);
-                        if (channel != null) {
-                            if (msgType == "MuffledLocal") channel.Muffled = true;
-                            else channel.Muffled = false; 
-                        }
-
-                        if (channel == null)
+                        Vector2 pos = character != null ? character.WorldPosition : (Character.Controlled != null ? Character.Controlled.WorldPosition : Vector2.Zero);
+                        
+                        var channel = (msgType == "Radio" || character == null) ? sound.Play(gain) : sound.Play(gain, 1500f, pos);
+                        if (channel != null)
                         {
-                            TTSManager.Log("[BaroVoices TTS] WARNING: sound.Play() returned null! Trying again in 300ms...");
-                            Task.Delay(300).ContinueWith(__ => {
-                                float retryGain = (safeVolume / 100f) * 2.5f;
-                                Vector2 retryPos = character != null ? character.WorldPosition : Vector2.Zero;
-                                var retryChannel = msgType == "Radio" ? sound.Play(retryGain) : sound.Play(retryGain, 1500f, retryPos);
-                                if (retryChannel != null) {
-                                    if (msgType == "MuffledLocal") retryChannel.Muffled = true;
-                                    else {
-                                        retryChannel.Muffled = false; 
-                                        if (msgType != "Radio" && character != null) {
-                                            retryChannel.Position = new Vector3(character.WorldPosition.X, character.WorldPosition.Y, 0f);
-                                            lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(retryChannel, character, msgType)); }
-                                        }
-                                    }
-                                }
-                            });
+                            if (msgType == "MuffledLocal") channel.Muffled = true;
+                            else channel.Muffled = false;
+                            
+                            lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(channel, character, msgType)); }
+                            TTSManager.Log("[BaroVoices TTS] SUCCESS: Audio channel started playing.");
                         }
                         else
                         {
-                            TTSManager.Log("[BaroVoices TTS] SUCCESS: Audio channel started playing.");
-                            if (msgType != "Radio" && character != null)
-                            {
-                                channel.Position = new Vector3(character.WorldPosition.X, character.WorldPosition.Y, 0f);
-                                lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(channel, character, msgType)); }
-                            }
+                            TTSManager.Log("[BaroVoices TTS] WARNING: sound.Play() returned null! Retrying in 250ms...");
+                            Task.Delay(250).ContinueWith(__ => {
+                                try
+                                {
+                                    float retryGain = (safeVolume / 100f) * 2.5f;
+                                    Vector2 retryPos = character != null ? character.WorldPosition : (Character.Controlled != null ? Character.Controlled.WorldPosition : Vector2.Zero);
+                                    var retryChannel = (msgType == "Radio" || character == null) ? sound.Play(retryGain) : sound.Play(retryGain, 1500f, retryPos);
+                                    if (retryChannel != null)
+                                    {
+                                        if (msgType == "MuffledLocal") retryChannel.Muffled = true;
+                                        else retryChannel.Muffled = false;
+                                        
+                                        lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(retryChannel, character, msgType)); }
+                                        TTSManager.Log("[BaroVoices TTS] SUCCESS: Audio channel started playing on retry.");
+                                    }
+                                    else
+                                    {
+                                        TTSManager.Log("[BaroVoices TTS] ERROR: sound.Play() failed on retry.");
+                                    }
+                                }
+                                catch (Exception ex2)
+                                {
+                                    TTSManager.Log("[BaroVoices TTS] Retry Play Error: " + ex2.Message);
+                                }
+                            });
                         }
                     }
                     catch (Exception ex)
@@ -391,7 +492,7 @@ public static class TTSManager
                 TTSManager.Log("[BaroVoices TTS] ERROR: LoadSound returned null.");
             }
 
-            Task.Delay(10000).ContinueWith(_ => {
+            Task.Delay(15000).ContinueWith(_ => {
                 try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
             });
         }
@@ -572,6 +673,28 @@ public static class TTSManager
         LoadSettings();
     }
 
+    public static bool IsMacOS()
+    {
+        try
+        {
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+                return true;
+        }
+        catch { }
+        return System.Environment.OSVersion.Platform == PlatformID.MacOSX || (System.Environment.OSVersion.Platform == PlatformID.Unix && System.IO.Directory.Exists("/Applications"));
+    }
+
+    public static bool IsUnixOrLinux()
+    {
+        try
+        {
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux))
+                return true;
+        }
+        catch { }
+        return System.Environment.OSVersion.Platform == PlatformID.Unix;
+    }
+
     public static string GetScriptPath(string scriptName)
     {
         List<string> rootDirs = new List<string> 
@@ -580,6 +703,17 @@ public static class TTSManager
             "WorkshopMods/Installed",
             System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Daedalic Entertainment GmbH", "Barotrauma", "WorkshopMods", "Installed")
         };
+
+        try
+        {
+            string homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(homeDir))
+            {
+                rootDirs.Add(System.IO.Path.Combine(homeDir, ".local", "share", "Daedalic Entertainment GmbH", "Barotrauma", "WorkshopMods", "Installed"));
+                rootDirs.Add(System.IO.Path.Combine(homeDir, "Library", "Application Support", "Daedalic Entertainment GmbH", "Barotrauma", "WorkshopMods", "Installed"));
+            }
+        }
+        catch { }
 
         foreach (var root in rootDirs)
         {
@@ -623,6 +757,7 @@ public static class TTSManager
                         if (k == "EnableBotTTS" && bool.TryParse(v, out bool ebt)) Settings.EnableBotTTS = ebt;
                         if (k == "SampleRate" && int.TryParse(v, out int sr)) Settings.SampleRate = sr;
                         if (k == "TTSEngine") Settings.TTSEngine = v;
+                        if (k == "EnableVoiceQueue" && bool.TryParse(v, out bool evq)) Settings.EnableVoiceQueue = evq;
                     }
                 }
             }
@@ -652,7 +787,8 @@ public static class TTSManager
                 "DebugLogging=" + Settings.DebugLogging,
                 "EnableBotTTS=" + Settings.EnableBotTTS,
                 "SampleRate=" + Settings.SampleRate,
-                "TTSEngine=" + Settings.TTSEngine
+                "TTSEngine=" + Settings.TTSEngine,
+                "EnableVoiceQueue=" + Settings.EnableVoiceQueue
             };
             System.IO.File.WriteAllLines("TTSModSettings.txt", lines);
         }
@@ -864,7 +1000,7 @@ public static class TTSModMenu
                 };
                 speedScroll.ToolTip = TTSManager.GetLoc("Скорость чтения для всех персонажей. 0 = нормальная.", "所有角色的基础阅读速度。0 = 正常。", "Base reading speed for all characters. 0 = normal.");
 
-                var checksRow1 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.15f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+                var checksRow1 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
 
                 string uniqTxt = TTSManager.GetLoc("Авто-выбор голосов", "自动分配声音", "Auto-assign voices");
                 var uniqueBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow1.RectTransform), uniqTxt)
@@ -886,6 +1022,20 @@ public static class TTSModMenu
                 botBox.OnSelected = (tickBox) => 
                 { 
                     TTSManager.EnableBotTTS = tickBox.Selected; 
+                    return true; 
+                };
+
+                var checksRow2 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+
+                string queueTxt = TTSManager.GetLoc("Очередь сообщений", "语音排队模式", "Voice Queue");
+                var queueBox = new GUITickBox(new RectTransform(new Vector2(0.95f, 1f), checksRow2.RectTransform), queueTxt)
+                {
+                    Selected = TTSManager.EnableVoiceQueue,
+                    ToolTip = TTSManager.GetLoc("Фразы одного персонажа проигрываются по очереди, предотвращая наслоение звуков.", "按顺序播放同一角色的语音，防止声音重叠混杂。", "Plays voice messages sequentially per character, preventing overlapping audio.")
+                };
+                queueBox.OnSelected = (tickBox) => 
+                { 
+                    TTSManager.EnableVoiceQueue = tickBox.Selected; 
                     return true; 
                 };
             };
@@ -914,24 +1064,49 @@ public static class TTSModMenu
                 {
                     try
                     {
-                        bool isLinux = System.Environment.OSVersion.Platform == PlatformID.Unix;
-                        string scriptName = isLinux ? "start_server.sh" : "start_server.bat";
+                        bool isMac = TTSManager.IsMacOS();
+                        bool isLinux = !isMac && TTSManager.IsUnixOrLinux();
+                        string scriptName = (isMac || isLinux) ? "start_server.sh" : "start_server.bat";
                         string modPath = TTSManager.GetScriptPath(scriptName);
                         if (System.IO.File.Exists(modPath))
                         {
+                            string fullPath = System.IO.Path.GetFullPath(modPath);
                             string langArg = TTSManager.IsRussianLanguage ? "ru" : (TTSManager.IsChineseLanguage ? "zh" : "en");
-                            if (isLinux)
+                            
+                            if (isMac)
                             {
+                                try
+                                {
+                                    System.Diagnostics.Process.Start("chmod", $"+x \"{fullPath}\"");
+                                }
+                                catch { }
+
+                                string appleScript = $"tell application \"Terminal\" to do script \"bash '{fullPath}' {langArg}\"";
+                                System.Diagnostics.Process.Start(new ProcessStartInfo
+                                {
+                                    FileName = "osascript",
+                                    Arguments = $"-e \"{appleScript}\"",
+                                    UseShellExecute = false
+                                });
+                            }
+                            else if (isLinux)
+                            {
+                                try
+                                {
+                                    System.Diagnostics.Process.Start("chmod", $"+x \"{fullPath}\"");
+                                }
+                                catch { }
+
                                 System.Diagnostics.Process.Start(new ProcessStartInfo
                                 {
                                     FileName = "/bin/bash",
-                                    Arguments = $"-c \"x-terminal-emulator -e \\\"bash '{System.IO.Path.GetFullPath(modPath)}' {langArg}\\\" || gnome-terminal -- bash '{System.IO.Path.GetFullPath(modPath)}' {langArg} || xterm -e bash '{System.IO.Path.GetFullPath(modPath)}' {langArg}\"",
+                                    Arguments = $"-c \"x-terminal-emulator -e \\\"bash '{fullPath}' {langArg}\\\" || gnome-terminal -- bash '{fullPath}' {langArg} || konsole -e bash '{fullPath}' {langArg} || xfce4-terminal -e \\\"bash '{fullPath}' {langArg}\\\" || alacritty -e bash '{fullPath}' {langArg} || kitty bash '{fullPath}' {langArg} || xterm -e bash '{fullPath}' {langArg}\"",
                                     UseShellExecute = false
                                 });
                             }
                             else
                             {
-                                System.Diagnostics.Process.Start("cmd.exe", $"/c start \"\" \"{System.IO.Path.GetFullPath(modPath)}\" {langArg}");
+                                System.Diagnostics.Process.Start("cmd.exe", $"/c start \"\" \"{fullPath}\" {langArg}");
                             }
                             startBtn.Text = TTSManager.GetLoc("Запускается...", "正在启动...", "Starting...");
                         }

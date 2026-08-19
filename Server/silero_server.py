@@ -54,9 +54,12 @@ sample_rate = 24000
 def initialize_server():
     global model_ru, model_en, device, executor, piper_models
     
-    if device_arg != 'cpu' and torch.cuda.is_available():
+    if device_arg in ['gpu', 'cuda'] and torch.cuda.is_available():
         device = torch.device('cuda')
         print("Используется GPU (CUDA)" if is_ru else "Using GPU (CUDA)")
+    elif device_arg in ['mps', 'gpu'] and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device('mps')
+        print("Используется Apple Silicon GPU (MPS / Metal)" if is_ru else "Using Apple Silicon GPU (MPS / Metal)")
     else:
         device = torch.device('cpu')
         print("Используется CPU" if is_ru else "Using CPU")
@@ -69,7 +72,7 @@ def initialize_server():
     else:
         print(f"Optimization: allocated {threads} out of {total_cores} CPU threads for TTS.")
     
-    executor = ThreadPoolExecutor(max_workers=1)
+    executor = ThreadPoolExecutor(max_workers=2)
     
     print("Загрузка нейросети Silero TTS... Это может занять несколько минут при первом запуске." if is_ru else "Loading Silero TTS neural network... This may take a few minutes on first run.")
     try:
@@ -109,6 +112,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
 
     def _generate_audio(self, text, speaker, req_sample_rate, boost, msg_type, distance, rate=0, engine='silero'):
+        inference_ctx = torch.inference_mode if hasattr(torch, 'inference_mode') else torch.no_grad
+        with inference_ctx():
+            return self._generate_audio_impl(text, speaker, req_sample_rate, boost, msg_type, distance, rate, engine)
+
+    def _generate_audio_impl(self, text, speaker, req_sample_rate, boost, msg_type, distance, rate=0, engine='silero'):
         has_cyrillic = bool(re.search('[а-яА-ЯёЁ]', text))
         has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
         
@@ -247,7 +255,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 audio[-fade_samples:] *= fade
                 audio[:fade_samples] *= fade.flip(0)
                 
-            torch.save(audio, cache_path)
+            audio_to_save = audio.detach().cpu()
+            torch.save(audio_to_save, cache_path)
             
             try:
                 cache_files = [os.path.join(CACHE_DIR, f) for f in os.listdir(CACHE_DIR) if f.endswith('.pt')]
@@ -285,11 +294,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 print(f"Ошибка аудиофильтра рации: {e}" if is_ru else f"Radio filter error: {e}")
         playback_rate = int(req_sample_rate * (1.0 + (rate * 0.03)))
         
-        silence_pad = torch.zeros(int(req_sample_rate * 0.3))
+        silence_pad = torch.zeros(int(req_sample_rate * 0.1), device=audio.device)
         audio = torch.cat([audio, silence_pad])
         
         buffer = io.BytesIO()
-        sf.write(buffer, audio.numpy(), playback_rate, format='OGG', subtype='VORBIS')
+        audio_np = audio.detach().cpu().numpy()
+        sf.write(buffer, audio_np, playback_rate, format='OGG', subtype='VORBIS')
         buffer.seek(0)
         return buffer
 
@@ -340,5 +350,13 @@ def run(server_class=ThreadingHTTPServer, handler_class=RequestHandler, port=500
     httpd.serve_forever()
 
 if __name__ == '__main__':
-    initialize_server()
-    run()
+    try:
+        initialize_server()
+        run()
+    except Exception as e:
+        import traceback
+        with open("server_crash.log", "w", encoding="utf-8") as f:
+            f.write(traceback.format_exc())
+        print(f"\n[КРИТИЧЕСКАЯ ОШИБКА] Сервер упал / [CRITICAL ERROR] Server crashed:\n{e}\n")
+        print("Подробности сохранены в / Details saved to: server_crash.log")
+        input("Нажмите Enter для выхода... / Press Enter to exit...")
