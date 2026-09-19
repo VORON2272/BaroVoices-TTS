@@ -10,3 +10,10 @@ env/
 
 # Mod specific temp files
 venv_path.txt
+TTSModSettings.txt
+
+# External workshop mods / test files
+2518816103/
+
+# Internal AI agent rules
+agent_rules.md

@@ -111,12 +111,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
 
-    def _generate_audio(self, text, speaker, req_sample_rate, boost, msg_type, distance, rate=0, engine='silero'):
+    def _generate_audio(self, text, speaker, req_sample_rate, boost, msg_type, distance, rate=0, engine='silero', radio_filter=True):
         inference_ctx = torch.inference_mode if hasattr(torch, 'inference_mode') else torch.no_grad
         with inference_ctx():
-            return self._generate_audio_impl(text, speaker, req_sample_rate, boost, msg_type, distance, rate, engine)
+            return self._generate_audio_impl(text, speaker, req_sample_rate, boost, msg_type, distance, rate, engine, radio_filter)
 
-    def _generate_audio_impl(self, text, speaker, req_sample_rate, boost, msg_type, distance, rate=0, engine='silero'):
+    def _generate_audio_impl(self, text, speaker, req_sample_rate, boost, msg_type, distance, rate=0, engine='silero', radio_filter=True):
         has_cyrillic = bool(re.search('[а-яА-ЯёЁ]', text))
         has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
         
@@ -274,24 +274,27 @@ class RequestHandler(BaseHTTPRequestHandler):
             audio = audio * boost
             audio = torch.clamp(audio, -1.0, 1.0)
             
-        if msg_type == "Radio":
-            base_noise = 0.08
-            dist_noise = min(max(distance - 1000.0, 0.0) / 4000.0, 1.0) * 0.25
+        if msg_type == "Radio" and radio_filter:
+            try:
+                audio_2d = audio.unsqueeze(0)
+                # 350Hz highpass cuts rumble, 5000Hz lowpass ensures crisp speech & clear consonants
+                audio_2d = F.highpass_biquad(audio_2d, req_sample_rate, 350.0)
+                audio_2d = F.lowpass_biquad(audio_2d, req_sample_rate, 5000.0)
+                
+                # Soft analog saturation for authentic walkie-talkie speaker warmth
+                audio_2d = torch.tanh(audio_2d * 1.25)
+                audio = audio_2d.squeeze(0)
+            except Exception as e:
+                print(f"Ошибка аудиофильтра рации: {e}" if is_ru else f"Radio filter error: {e}")
+
+            # Subtle tactical radio carrier static
+            base_noise = 0.015
+            dist_noise = min(max(distance - 1500.0, 0.0) / 4000.0, 1.0) * 0.04
             noise_level = base_noise + dist_noise
             
             noise = torch.randn_like(audio) * noise_level
             audio = audio + noise
-                
             audio = torch.clamp(audio, -1.0, 1.0)
-
-            try:
-                audio_2d = audio.unsqueeze(0)
-                audio_2d = F.highpass_biquad(audio_2d, req_sample_rate, 600.0)
-                audio_2d = F.lowpass_biquad(audio_2d, req_sample_rate, 2500.0)
-                audio_2d = audio_2d * 2.5
-                audio = audio_2d.squeeze(0)
-            except Exception as e:
-                print(f"Ошибка аудиофильтра рации: {e}" if is_ru else f"Radio filter error: {e}")
         playback_rate = int(req_sample_rate * (1.0 + (rate * 0.03)))
         
         silence_pad = torch.zeros(int(req_sample_rate * 0.1), device=audio.device)
@@ -315,6 +318,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         distance = float(data.get('distance', 0.0))
         rate = int(data.get('rate', 0))
         engine = data.get('engine', 'silero')
+        radio_filter = bool(data.get('radio_filter', True))
         
         req_sample_rate = int(data.get('sample_rate', 24000))
         if req_sample_rate not in [8000, 24000, 48000]:
@@ -330,7 +334,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             text += '.'
             
         try:
-            future = executor.submit(self._generate_audio, text, speaker, req_sample_rate, boost, msg_type, distance, rate, engine)
+            future = executor.submit(self._generate_audio, text, speaker, req_sample_rate, boost, msg_type, distance, rate, engine, radio_filter)
             buffer = future.result()
             
             self.send_response(200)

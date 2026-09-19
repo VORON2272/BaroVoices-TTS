@@ -69,6 +69,8 @@ public class TTSSettings
     public bool EnableBotTTS = true;
     public int SampleRate = 24000;
     public bool EnableVoiceQueue = true;
+    public bool EnableSuitMuffle = true;
+    public bool EnableRadioFilter = true;
 }
 
 public class QueuedVoiceAudio
@@ -151,6 +153,16 @@ public static class TTSManager
     { 
         get => Settings.EnableVoiceQueue; 
         set { Settings.EnableVoiceQueue = value; SaveSettings(); }
+    }
+    public static bool EnableSuitMuffle 
+    { 
+        get => Settings.EnableSuitMuffle; 
+        set { Settings.EnableSuitMuffle = value; SaveSettings(); }
+    }
+    public static bool EnableRadioFilter 
+    { 
+        get => Settings.EnableRadioFilter; 
+        set { Settings.EnableRadioFilter = value; SaveSettings(); }
     }
 
     private static List<Tuple<Barotrauma.Sounds.SoundChannel, Character, string>> activeVoiceChannels = new List<Tuple<Barotrauma.Sounds.SoundChannel, Character, string>>();
@@ -241,33 +253,17 @@ public static class TTSManager
                             catch { }
                         }
 
-                        if (msgType == "MuffledLocal") isMuffled = true;
+                        if (Settings.EnableSuitMuffle && msgType == "MuffledLocal") isMuffled = true;
 
                         if (character.AnimController != null && character.AnimController.HeadInWater)
                         {
-                            bool hasSuit = false;
-                            try
+                            if (Settings.EnableSuitMuffle)
                             {
-                                if (character.Inventory != null)
+                                bool hasSuit = IsWearingHelmetOrClosedSuit(character);
+                                if (!hasSuit)
                                 {
-                                    foreach (var item in character.Inventory.AllItems)
-                                    {
-                                        if (item != null && character.HasEquippedItem(item))
-                                        {
-                                            if (item.HasTag("divingsuit") || item.HasTag("deepdiving") || item.HasTag("deepdivinglarge"))
-                                            {
-                                                hasSuit = true;
-                                                break;
-                                            }
-                                        }
-                                    }
+                                    isMuffled = true;
                                 }
-                            }
-                            catch { }
-
-                            if (!hasSuit)
-                            {
-                                isMuffled = true;
                             }
                         }
 
@@ -346,7 +342,8 @@ public static class TTSManager
             {
                 string finalEngine = string.IsNullOrEmpty(engine) ? Settings.TTSEngine : engine;
                 string escapedText = text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r");
-                string json = $"{{\"text\":\"{escapedText}\",\"voice\":\"{voice}\",\"rate\":{rate},\"volume\":{volume},\"boost\":{volumeBoost},\"msg_type\":\"{msgType}\",\"distance\":{distance.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"sample_rate\":{Settings.SampleRate},\"engine\":\"{finalEngine}\"}}";
+                string radioFilterParam = Settings.EnableRadioFilter ? "true" : "false";
+                string json = $"{{\"text\":\"{escapedText}\",\"voice\":\"{voice}\",\"rate\":{rate},\"volume\":{volume},\"boost\":{volumeBoost},\"msg_type\":\"{msgType}\",\"distance\":{distance.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"sample_rate\":{Settings.SampleRate},\"engine\":\"{finalEngine}\",\"radio_filter\":{radioFilterParam}}}";
                 var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
 
                 var response = await httpClient.PostAsync("http://127.0.0.1:5000/tts", content);
@@ -446,7 +443,7 @@ public static class TTSManager
                         var channel = (msgType == "Radio" || character == null) ? sound.Play(gain) : sound.Play(gain, 1500f, pos);
                         if (channel != null)
                         {
-                            if (msgType == "MuffledLocal") channel.Muffled = true;
+                            if (Settings.EnableSuitMuffle && msgType == "MuffledLocal") channel.Muffled = true;
                             else channel.Muffled = false;
                             
                             lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(channel, character, msgType)); }
@@ -463,7 +460,7 @@ public static class TTSManager
                                     var retryChannel = (msgType == "Radio" || character == null) ? sound.Play(retryGain) : sound.Play(retryGain, 1500f, retryPos);
                                     if (retryChannel != null)
                                     {
-                                        if (msgType == "MuffledLocal") retryChannel.Muffled = true;
+                                        if (Settings.EnableSuitMuffle && msgType == "MuffledLocal") retryChannel.Muffled = true;
                                         else retryChannel.Muffled = false;
                                         
                                         lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(retryChannel, character, msgType)); }
@@ -524,32 +521,135 @@ public static class TTSManager
         }
     }
 
-    private static void CheckCharacterState(Character character, ref int rate, ref int volumeBoost, ref string msgType)
+    public static bool IsWearingHelmetOrClosedSuit(Character character)
     {
-        if (character == null) return;
-        try 
+        if (character == null || character.Inventory == null) return false;
+
+        try
         {
-            if (character.AnimController != null && character.AnimController.InWater)
+            // 1. Check Head slot directly for diving helmet, mask or face-covering gear
+            Item headItem = null;
+            try
             {
-                if (msgType != "Radio") msgType = "MuffledLocal";
+                headItem = character.Inventory.GetItemInLimbSlot(InvSlotType.Head);
             }
-            else 
+            catch { }
+
+            if (headItem != null)
             {
-                bool hasSuit = false;
-                if (character.Inventory != null)
+                if (headItem.HasTag("divinghelmet") || headItem.HasTag("deepdiving") || 
+                    headItem.HasTag("diving") || headItem.HasTag("divingmask") || 
+                    headItem.HasTag("mask") || headItem.HasTag("divingsuit"))
                 {
-                    try { hasSuit = character.HasEquippedItem("divingsuit") || character.HasEquippedItem("deepdiving"); } catch { }
+                    return true;
                 }
-                if (hasSuit && msgType != "Radio") msgType = "MuffledLocal";
+
+                try
+                {
+                    var wearable = headItem.GetComponent<Barotrauma.Items.Components.Wearable>();
+                    if (wearable != null && wearable.HideFace)
+                    {
+                        return true;
+                    }
+                }
+                catch { }
+            }
+
+            // 2. Check OuterClothes (Suit) slot
+            Item outerItem = null;
+            try
+            {
+                outerItem = character.Inventory.GetItemInLimbSlot(InvSlotType.OuterClothes);
+            }
+            catch { }
+
+            if (outerItem != null)
+            {
+                if (outerItem.HasTag("divingsuit") || outerItem.HasTag("deepdiving") || outerItem.HasTag("deepdivinglarge"))
+                {
+                    // Full enclosed suit (vanilla style) covers head/face or hides limb Head.
+                    // Modular suit body (Tidebreakers) does NOT hide head/face and has separate helmet.
+                    try
+                    {
+                        var wearable = outerItem.GetComponent<Barotrauma.Items.Components.Wearable>();
+                        if (wearable != null)
+                        {
+                            if (wearable.HideFace || wearable.HideLimb(LimbType.Head))
+                            {
+                                return true;
+                            }
+
+                            var spritesProp = wearable.GetType().GetProperty("WearableSprites");
+                            if (spritesProp != null && spritesProp.GetValue(wearable) is System.Collections.IEnumerable sprites)
+                            {
+                                foreach (var s in sprites)
+                                {
+                                    var limbProp = s.GetType().GetProperty("Limb");
+                                    var limbVal = limbProp != null ? limbProp.GetValue(s)?.ToString() : null;
+                                    if (limbVal == "Head")
+                                    {
+                                        var hideOtherProp = s.GetType().GetProperty("HideOtherWearables");
+                                        if (hideOtherProp != null && (bool)hideOtherProp.GetValue(s))
+                                        {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // It's a modular body suit without built-in head cover (Tidebreakers).
+                            // Since head slot was not a helmet, head is open!
+                            return false;
+                        }
+                    }
+                    catch { }
+
+                    // Fallback if wearable component is null: muffled only if head is also covered
+                    if (headItem != null) return true;
+                }
             }
         }
         catch { }
 
+        return false;
+    }
+
+    private static void CheckCharacterState(Character character, ref int rate, ref int volumeBoost, ref string msgType)
+    {
+        if (character == null) return;
+
+        // 1. Health & Oxygen Immersion
         try 
         {
+            // Low health (< 30%): quieter and slightly slower (exhausted/weak voice)
             if (character.HealthPercentage < 30f && character.HealthPercentage > 0f)
             {
                 volumeBoost -= 30;
+                rate -= 2;
+            }
+
+            // Low Oxygen / Suffocation (< 40%): gasping for air
+            if (character.Oxygen < 40f && character.Oxygen > 0f)
+            {
+                volumeBoost -= 20;
+                rate -= 1;
+            }
+        }
+        catch { }
+
+        // 2. Suit & Water Muffling
+        try 
+        {
+            if (Settings.EnableSuitMuffle)
+            {
+                if (character.AnimController != null && character.AnimController.HeadInWater)
+                {
+                    if (msgType != "Radio") msgType = "MuffledLocal";
+                }
+                else if (IsWearingHelmetOrClosedSuit(character))
+                {
+                    if (msgType != "Radio") msgType = "MuffledLocal";
+                }
             }
         }
         catch { }
@@ -758,6 +858,8 @@ public static class TTSManager
                         if (k == "SampleRate" && int.TryParse(v, out int sr)) Settings.SampleRate = sr;
                         if (k == "TTSEngine") Settings.TTSEngine = v;
                         if (k == "EnableVoiceQueue" && bool.TryParse(v, out bool evq)) Settings.EnableVoiceQueue = evq;
+                        if (k == "EnableSuitMuffle" && bool.TryParse(v, out bool esm)) Settings.EnableSuitMuffle = esm;
+                        if (k == "EnableRadioFilter" && bool.TryParse(v, out bool erf)) Settings.EnableRadioFilter = erf;
                     }
                 }
             }
@@ -788,7 +890,9 @@ public static class TTSManager
                 "EnableBotTTS=" + Settings.EnableBotTTS,
                 "SampleRate=" + Settings.SampleRate,
                 "TTSEngine=" + Settings.TTSEngine,
-                "EnableVoiceQueue=" + Settings.EnableVoiceQueue
+                "EnableVoiceQueue=" + Settings.EnableVoiceQueue,
+                "EnableSuitMuffle=" + Settings.EnableSuitMuffle,
+                "EnableRadioFilter=" + Settings.EnableRadioFilter
             };
             System.IO.File.WriteAllLines("TTSModSettings.txt", lines);
         }
@@ -952,10 +1056,10 @@ public static class TTSModMenu
                 string hint1 = TTSManager.GetLoc("Настройки геймплея. Действуют на всех игроков.", "游戏设置。适用于所有玩家。", "Gameplay settings. Apply to all players.");
                 new GUITextBlock(new RectTransform(new Vector2(1f, 0.10f), layout.RectTransform), hint1, textAlignment: Alignment.TopCenter, wrap: true) { TextColor = Color.LightCyan };
 
-                var audioBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.70f), layout.RectTransform), style: "InnerFrame");
-                var audioLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.9f), audioBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.03f };
+                var audioBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.78f), layout.RectTransform), style: "InnerFrame");
+                var audioLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), audioBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.02f };
 
-                var volContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.15f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+                var volContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
                 string volTxt = TTSManager.GetLoc("Общая Громкость: ", "全局音量：", "Global Volume: ");
                 var volLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), volContainer.RectTransform), volTxt + TTSManager.GlobalVolume + "%", textAlignment: Alignment.CenterLeft);
                 var volumeScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), volContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
@@ -970,7 +1074,7 @@ public static class TTSModMenu
                 };
                 volumeScroll.ToolTip = TTSManager.GetLoc("Общая громкость мода. 100% = нормальная громкость в игре.", "全局模组音量。100% = 游戏正常音量。", "Global mod volume. 100% = normal in-game volume.");
 
-                var boostContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.15f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+                var boostContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
                 string boostTxt = TTSManager.GetLoc("Усиление (Boost): ", "音量增强 (Boost)：", "Volume Boost: ");
                 var boostLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), boostContainer.RectTransform), boostTxt + TTSManager.VolumeBoost + "%", textAlignment: Alignment.CenterLeft);
                 var boostScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), boostContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
@@ -985,7 +1089,7 @@ public static class TTSModMenu
                 };
                 boostScroll.ToolTip = TTSManager.GetLoc("Усиление звука до 500% (полезно, если голоса кажутся слишком тихими).", "将音量增强至最多500%（如果声音太小很有用）。", "Boosts audio up to 500% (useful if voices are too quiet).");
 
-                var speedContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.15f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+                var speedContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
                 string spdTxt = TTSManager.GetLoc("Базовая скорость: ", "基础语速：", "Base Speed: ");
                 var speedLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), speedContainer.RectTransform), spdTxt + TTSManager.BaseRate, textAlignment: Alignment.CenterLeft);
                 var speedScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), speedContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
@@ -1000,7 +1104,7 @@ public static class TTSModMenu
                 };
                 speedScroll.ToolTip = TTSManager.GetLoc("Скорость чтения для всех персонажей. 0 = нормальная.", "所有角色的基础阅读速度。0 = 正常。", "Base reading speed for all characters. 0 = normal.");
 
-                var checksRow1 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+                var checksRow1 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.12f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
 
                 string uniqTxt = TTSManager.GetLoc("Авто-выбор голосов", "自动分配声音", "Auto-assign voices");
                 var uniqueBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow1.RectTransform), uniqTxt)
@@ -1025,10 +1129,10 @@ public static class TTSModMenu
                     return true; 
                 };
 
-                var checksRow2 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+                var checksRow2 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.12f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
 
                 string queueTxt = TTSManager.GetLoc("Очередь сообщений", "语音排队模式", "Voice Queue");
-                var queueBox = new GUITickBox(new RectTransform(new Vector2(0.95f, 1f), checksRow2.RectTransform), queueTxt)
+                var queueBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow2.RectTransform), queueTxt)
                 {
                     Selected = TTSManager.EnableVoiceQueue,
                     ToolTip = TTSManager.GetLoc("Фразы одного персонажа проигрываются по очереди, предотвращая наслоение звуков.", "按顺序播放同一角色的语音，防止声音重叠混杂。", "Plays voice messages sequentially per character, preventing overlapping audio.")
@@ -1036,6 +1140,32 @@ public static class TTSModMenu
                 queueBox.OnSelected = (tickBox) => 
                 { 
                     TTSManager.EnableVoiceQueue = tickBox.Selected; 
+                    return true; 
+                };
+
+                string muffleTxt = TTSManager.GetLoc("Глушить в скафандрах", "潜水服/头盔闷音", "Muffle in Suits");
+                var muffleBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow2.RectTransform), muffleTxt)
+                {
+                    Selected = TTSManager.EnableSuitMuffle,
+                    ToolTip = TTSManager.GetLoc("Приглушает голос внутри закрытого шлема или под водой. Отключите, если используете конфликтующие моды на броню.", "在密闭头盔内和水下使声音发闷。如果使用冲突的护甲模组可关闭。", "Muffles voice inside closed helmets or underwater. Disable if using conflicting armor mods.")
+                };
+                muffleBox.OnSelected = (tickBox) => 
+                { 
+                    TTSManager.EnableSuitMuffle = tickBox.Selected; 
+                    return true; 
+                };
+
+                var checksRow3 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.12f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+
+                string radioTxt = TTSManager.GetLoc("Эффект рации", "无线电对讲机音效", "Radio Filter");
+                var radioBox = new GUITickBox(new RectTransform(new Vector2(0.95f, 1f), checksRow3.RectTransform), radioTxt)
+                {
+                    Selected = TTSManager.EnableRadioFilter,
+                    ToolTip = TTSManager.GetLoc("Применяет тактический частотный фильтр и шум рации к сообщениям. Отключите для кристально чистого звука.", "应用无线电战术滤波和杂音。关闭以获得无杂音的清晰语音。", "Applies tactical bandpass filter and subtle static to radio chat. Disable for crystal-clear audio.")
+                };
+                radioBox.OnSelected = (tickBox) => 
+                { 
+                    TTSManager.EnableRadioFilter = tickBox.Selected; 
                     return true; 
                 };
             };
