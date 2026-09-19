@@ -127,6 +127,11 @@ if defined SAVED_VENV (
 ) else (
     if exist ".venv\Scripts\python.exe" set "PYTHON_EXE=.venv\Scripts\python.exe"
 )
+"%PYTHON_EXE%" -c "import piper, requests, soundfile" 2>nul
+if %errorlevel% neq 0 (
+    echo [TTS] Проверка пакетов: установка piper-tts, requests, soundfile...
+    "%PYTHON_EXE%" -m pip install piper-tts requests soundfile
+)
 "%PYTHON_EXE%" Server\silero_server.py %LANG% %DEVICE_ARG%
 if %errorlevel% neq 0 pause
 pause

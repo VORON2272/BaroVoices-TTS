@@ -11,9 +11,22 @@ env/
 # Mod specific temp files
 venv_path.txt
 TTSModSettings.txt
+TTSSettings.txt
+TTSBotVoices.txt
+
+# Piper ONNX binary models (downloaded on demand, too large for git)
+Server/piper_models/
+*.tar.bz2
+*.tmp
 
 # External workshop mods / test files
 2518816103/
+Soundproof Walls 2.0/
 
 # Internal AI agent rules
 agent_rules.md
+
+# Scratch directory
+scratch/
+g2pW/
+

@@ -60,7 +60,15 @@ Hook.Patch("Barotrauma.ChatBox", "AddMessage", function(instance, ptable)
     -- Exclude commands starting with / or !
     if string.sub(text, 1, 1) == "/" or string.sub(text, 1, 1) == "!" then return end
     
+    -- Exclude system messages without a character sender
+    if not character then return end
+    
+    -- Exclude mod announcements and system messages
+    if string.find(text, "BaroVoices") or string.sub(text, 1, 4) == "[TTS" then return end
+    
     local msgTypeStr = tostring(chatMsg.Type)
+    if msgTypeStr == "Server" or msgTypeStr == "MessageBox" or msgTypeStr == "Console" or msgTypeStr == "ServerMessageBox" then return end
+    
     if character and CustomVoices[character.ID] then
         if ttsManager.SpeakWithCustom then
             ttsManager.SpeakWithCustom(character, text, CustomVoices[character.ID].voice or "baya", CustomVoices[character.ID].speed, msgTypeStr, CustomVoices[character.ID].engine or "")

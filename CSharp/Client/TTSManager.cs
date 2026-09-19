@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using Barotrauma;
+using Barotrauma.Networking;
 using MoonSharp.Interpreter;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
@@ -82,13 +83,143 @@ public class QueuedVoiceAudio
     public float Distance;
 }
 
+public class BotVoiceAssignment
+{
+    public string BotName;
+    public string VoiceId;
+    public string Engine = "silero";
+    public int Speed = 0;
+}
+
+public class VoiceDef
+{
+    public string Id;
+    public string Engine; // "silero" or "piper"
+    public string Lang;   // "ru", "en", "zh"
+    public string Gender; // "female" or "male"
+    public string NameRu;
+    public string NameZh;
+    public string NameEn;
+    public string ModelTag;
+
+    public string GetName()
+    {
+        if (TTSManager.IsRussianLanguage) return NameRu;
+        if (TTSManager.IsChineseLanguage) return NameZh;
+        return NameEn;
+    }
+}
+
 public static class TTSManager
 {
     public static TTSSettings Settings { get; private set; } = new TTSSettings();
+    public static readonly Dictionary<string, BotVoiceAssignment> BotVoices = new Dictionary<string, BotVoiceAssignment>(StringComparer.OrdinalIgnoreCase);
+
+    public static bool IsFemaleCharacter(Character character)
+    {
+        if (character == null || character.Info == null) return false;
+        try
+        {
+            var infoType = character.Info.GetType();
+            var gField = infoType.GetField("Gender", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            string genderStr = gField != null ? gField.GetValue(character.Info)?.ToString() ?? "" : "";
+            if (string.IsNullOrEmpty(genderStr))
+            {
+                var gProp = infoType.GetProperty("Gender", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (gProp != null) genderStr = gProp.GetValue(character.Info)?.ToString() ?? "";
+            }
+            if (string.IsNullOrEmpty(genderStr))
+            {
+                var pProp = infoType.GetProperty("Pronouns", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (pProp != null) genderStr = pProp.GetValue(character.Info)?.ToString() ?? "";
+            }
+            return (genderStr.IndexOf("Female", StringComparison.OrdinalIgnoreCase) >= 0 || genderStr.IndexOf("She", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+        catch { }
+        return false;
+    }
+
+    public static List<Character> GetCrewBots()
+    {
+        var result = new List<Character>();
+        try
+        {
+            if (GameMain.GameSession?.CrewManager != null)
+            {
+                foreach (var c in GameMain.GameSession.CrewManager.GetCharacters())
+                {
+                    if (c != null && c.IsBot && !c.IsDead && !result.Contains(c))
+                    {
+                        result.Add(c);
+                    }
+                }
+            }
+            if (result.Count == 0 && Character.CharacterList != null)
+            {
+                foreach (var c in Character.CharacterList)
+                {
+                    if (c != null && c.IsBot && !c.IsDead)
+                    {
+                        if (Character.Controlled != null && c.TeamID == Character.Controlled.TeamID)
+                        {
+                            if (!result.Contains(c)) result.Add(c);
+                        }
+                        else if (c.TeamID == CharacterTeamType.Team1)
+                        {
+                            if (!result.Contains(c)) result.Add(c);
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    public static readonly List<VoiceDef> AvailableVoiceDefs = new List<VoiceDef>
+    {
+        // Russian - Silero
+        new VoiceDef { Id = "baya", Engine = "silero", Lang = "ru", Gender = "female", NameRu = "Байя", NameZh = "Baya", NameEn = "Baya", ModelTag = "Silero v4" },
+        new VoiceDef { Id = "aidar", Engine = "silero", Lang = "ru", Gender = "male", NameRu = "Айдар", NameZh = "Aidar", NameEn = "Aidar", ModelTag = "Silero v4" },
+        new VoiceDef { Id = "kseniya", Engine = "silero", Lang = "ru", Gender = "female", NameRu = "Ксения", NameZh = "Kseniya", NameEn = "Kseniya", ModelTag = "Silero v4" },
+        new VoiceDef { Id = "xenia", Engine = "silero", Lang = "ru", Gender = "female", NameRu = "Ксения v2", NameZh = "Xenia v2", NameEn = "Xenia v2", ModelTag = "Silero v4" },
+        new VoiceDef { Id = "eugene", Engine = "silero", Lang = "ru", Gender = "male", NameRu = "Евгений", NameZh = "Eugene", NameEn = "Eugene", ModelTag = "Silero v4" },
+
+        // Russian - Piper
+        new VoiceDef { Id = "baya", Engine = "piper", Lang = "ru", Gender = "female", NameRu = "Ирина", NameZh = "Irina", NameEn = "Irina", ModelTag = "Piper ONNX" },
+        new VoiceDef { Id = "aidar", Engine = "piper", Lang = "ru", Gender = "male", NameRu = "Дмитрий", NameZh = "Dmitri", NameEn = "Dmitri", ModelTag = "Piper ONNX" },
+        new VoiceDef { Id = "kseniya", Engine = "piper", Lang = "ru", Gender = "male", NameRu = "Денис", NameZh = "Denis", NameEn = "Denis", ModelTag = "Piper ONNX" },
+        new VoiceDef { Id = "xenia", Engine = "piper", Lang = "ru", Gender = "male", NameRu = "Руслан", NameZh = "Ruslan", NameEn = "Ruslan", ModelTag = "Piper ONNX" },
+
+        // English - Silero
+        new VoiceDef { Id = "en_0", Engine = "silero", Lang = "en", Gender = "female", NameRu = "En 0", NameZh = "En 0", NameEn = "En 0", ModelTag = "Silero v3" },
+        new VoiceDef { Id = "en_13", Engine = "silero", Lang = "en", Gender = "male", NameRu = "En 13", NameZh = "En 13", NameEn = "En 13", ModelTag = "Silero v3" },
+        new VoiceDef { Id = "en_15", Engine = "silero", Lang = "en", Gender = "male", NameRu = "En 15", NameZh = "En 15", NameEn = "En 15", ModelTag = "Silero v3" },
+        new VoiceDef { Id = "en_22", Engine = "silero", Lang = "en", Gender = "male", NameRu = "En 22", NameZh = "En 22", NameEn = "En 22", ModelTag = "Silero v3" },
+
+        // English - Piper Arctic
+        new VoiceDef { Id = "en_0", Engine = "piper", Lang = "en", Gender = "female", NameRu = "Arctic 0", NameZh = "Arctic 0", NameEn = "Arctic 0", ModelTag = "Piper Arctic" },
+        new VoiceDef { Id = "en_1", Engine = "piper", Lang = "en", Gender = "male", NameRu = "Arctic 1", NameZh = "Arctic 1", NameEn = "Arctic 1", ModelTag = "Piper Arctic" },
+        new VoiceDef { Id = "en_2", Engine = "piper", Lang = "en", Gender = "female", NameRu = "Arctic 2", NameZh = "Arctic 2", NameEn = "Arctic 2", ModelTag = "Piper Arctic" },
+        new VoiceDef { Id = "en_4", Engine = "piper", Lang = "en", Gender = "female", NameRu = "Arctic 4", NameZh = "Arctic 4", NameEn = "Arctic 4", ModelTag = "Piper Arctic" },
+        new VoiceDef { Id = "en_5", Engine = "piper", Lang = "en", Gender = "female", NameRu = "Arctic 5", NameZh = "Arctic 5", NameEn = "Arctic 5", ModelTag = "Piper Arctic" },
+        new VoiceDef { Id = "en_6", Engine = "piper", Lang = "en", Gender = "male", NameRu = "Arctic 6", NameZh = "Arctic 6", NameEn = "Arctic 6", ModelTag = "Piper Arctic" },
+        new VoiceDef { Id = "en_7", Engine = "piper", Lang = "en", Gender = "male", NameRu = "Arctic 7", NameZh = "Arctic 7", NameEn = "Arctic 7", ModelTag = "Piper Arctic" },
+
+        // Chinese - Piper
+        new VoiceDef { Id = "zh_huayan", Engine = "piper", Lang = "zh", Gender = "male", NameRu = "Хуаянь (华严)", NameZh = "华严 (标准普通话)", NameEn = "Huayan (Mandarin)", ModelTag = "Piper ONNX" },
+        new VoiceDef { Id = "zh_huayan_officer", Engine = "piper", Lang = "zh", Gender = "male", NameRu = "Хуаянь - Офицер СБ", NameZh = "华严 (安全官/低音)", NameEn = "Huayan (Security Officer)", ModelTag = "Piper Custom" },
+        new VoiceDef { Id = "zh_huayan_cadet", Engine = "piper", Lang = "zh", Gender = "male", NameRu = "Хуаянь - Матрос", NameZh = "华严 (水手/青年)", NameEn = "Huayan (Sailor Cadet)", ModelTag = "Piper Custom" },
+        new VoiceDef { Id = "zh_xiao_ya", Engine = "piper", Lang = "zh", Gender = "female", NameRu = "Сяоя (晓雅)", NameZh = "晓雅 (温柔女声)", NameEn = "Xiaoya (Gentle Female)", ModelTag = "Piper ONNX" },
+        new VoiceDef { Id = "zh_xiao_ya_medic", Engine = "piper", Lang = "zh", Gender = "female", NameRu = "Сяоя - Медик", NameZh = "晓雅 (医师/轻柔)", NameEn = "Xiaoya (Medic Soft)", ModelTag = "Piper Custom" },
+        new VoiceDef { Id = "zh_chaowen", Engine = "piper", Lang = "zh", Gender = "female", NameRu = "Чаовэнь (超雯)", NameZh = "超雯 (沉稳女声)", NameEn = "Chaowen (Composed Female)", ModelTag = "Piper ONNX" },
+        new VoiceDef { Id = "zh_chaowen_captain", Engine = "piper", Lang = "zh", Gender = "female", NameRu = "Чаовэнь - Капитан", NameZh = "超雯 (指挥官/庄重)", NameEn = "Chaowen (Captain)", ModelTag = "Piper Custom" },
+        new VoiceDef { Id = "zh_chaowen_engineer", Engine = "piper", Lang = "zh", Gender = "female", NameRu = "Чаовэнь - Инженер", NameZh = "超雯 (技师/明朗)", NameEn = "Chaowen (Engineer)", ModelTag = "Piper Custom" },
+    };
 
     private static readonly System.Net.Http.HttpClient httpClient = new System.Net.Http.HttpClient
     {
-        Timeout = TimeSpan.FromSeconds(20)
+        Timeout = TimeSpan.FromSeconds(60)
     };
 
     private static readonly ConcurrentDictionary<Character, ConcurrentQueue<QueuedVoiceAudio>> characterVoiceQueues = new ConcurrentDictionary<Character, ConcurrentQueue<QueuedVoiceAudio>>();
@@ -200,7 +331,7 @@ public static class TTSManager
         if (StatusLabelRef != null && StatusLabelRef.RectTransform != null && StatusLabelRef.RectTransform.Parent != null)
         {
             StatusLabelRef.TextColor = IsServerRunning ? Color.LimeGreen : Color.Tomato;
-            string prefix = IsRussianLanguage ? "Статус Сервера TTS: " : "TTS Server Status: ";
+            string prefix = IsRussianLanguage ? "● Сервер: " : (IsChineseLanguage ? "● 服务器: " : "● Server: ");
             StatusLabelRef.Text = prefix + ServerStatusText;
         }
 
@@ -349,8 +480,29 @@ public static class TTSManager
                 var response = await httpClient.PostAsync("http://127.0.0.1:5000/tts", content);
                 if (response.IsSuccessStatusCode)
                 {
+                    if (response.Headers.TryGetValues("X-TTS-Fallback", out var fallbackValues))
+                    {
+                        foreach (var val in fallbackValues)
+                        {
+                            if (val != null && val.Trim().ToLower() == "true")
+                            {
+                                string reason = "";
+                                if (response.Headers.TryGetValues("X-TTS-Fallback-Reason", out var reasonVals))
+                                {
+                                    reason = string.Join(" ", reasonVals);
+                                }
+                                NotifyFallback(reason);
+                                break;
+                            }
+                        }
+                    }
+
                     byte[] wavBytes = await response.Content.ReadAsByteArrayAsync();
-                    if (Settings.EnableVoiceQueue)
+                    if (msgType == "Preview" || !Settings.EnableVoiceQueue)
+                    {
+                        PlayWavBytes(character, wavBytes, volume, msgType, distance);
+                    }
+                    else
                     {
                         var item = new QueuedVoiceAudio
                         {
@@ -371,10 +523,6 @@ public static class TTSManager
                             if (globalVoiceQueue.Count < 5) globalVoiceQueue.Enqueue(item);
                         }
                     }
-                    else
-                    {
-                        PlayWavBytes(character, wavBytes, volume, msgType, distance);
-                    }
                 }
                 else
                 {
@@ -384,6 +532,48 @@ public static class TTSManager
             catch (Exception e)
             {
                 TTSManager.Log("[BaroVoices TTS] Network TTS Error: " + e.Message);
+            }
+        });
+    }
+
+    private static DateTime lastFallbackNoticeTime = DateTime.MinValue;
+
+    public static void NotifyFallback(string reason = "")
+    {
+        RunOnMainThread(() =>
+        {
+            try
+            {
+                if ((DateTime.UtcNow - lastFallbackNoticeTime).TotalSeconds < 20) return;
+                lastFallbackNoticeTime = DateTime.UtcNow;
+
+                string msg = GetLoc(
+                    "[BaroVoices TTS] [!] Ошибка Piper: голос временно переключён на Silero.",
+                    "[BaroVoices TTS] [!] Piper 合成异常：已自动切换至 Silero 引擎。",
+                    "[BaroVoices TTS] [!] Piper synthesis failed: temporarily fallen back to Silero."
+                );
+
+                try
+                {
+                    GUI.AddMessage(msg, Color.Orange, 6.0f);
+                }
+                catch { }
+
+                try
+                {
+                    ChatBox chatBox = GameMain.Client?.ChatBox ?? GameMain.GameSession?.CrewManager?.ChatBox;
+                    if (chatBox != null)
+                    {
+                        chatBox.AddMessage(ChatMessage.Create("", msg, ChatMessageType.Server, null));
+                    }
+                }
+                catch { }
+
+                Log("[BaroVoices TTS] Fallback notification sent: " + msg);
+            }
+            catch (Exception ex)
+            {
+                Log("[BaroVoices TTS] NotifyFallback error: " + ex.Message);
             }
         });
     }
@@ -440,10 +630,11 @@ public static class TTSManager
                         float gain = (safeVolume / 100f) * 2.5f;
                         Vector2 pos = character != null ? character.WorldPosition : (Character.Controlled != null ? Character.Controlled.WorldPosition : Vector2.Zero);
                         
-                        var channel = (msgType == "Radio" || character == null) ? sound.Play(gain) : sound.Play(gain, 1500f, pos);
+                        var channel = (msgType == "Radio" || msgType == "Preview" || character == null) ? sound.Play(gain) : sound.Play(gain, 1500f, pos);
                         if (channel != null)
                         {
-                            if (Settings.EnableSuitMuffle && msgType == "MuffledLocal") channel.Muffled = true;
+                            if (msgType == "Preview") channel.Muffled = false;
+                            else if (Settings.EnableSuitMuffle && msgType == "MuffledLocal") channel.Muffled = true;
                             else channel.Muffled = false;
                             
                             lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(channel, character, msgType)); }
@@ -457,10 +648,11 @@ public static class TTSManager
                                 {
                                     float retryGain = (safeVolume / 100f) * 2.5f;
                                     Vector2 retryPos = character != null ? character.WorldPosition : (Character.Controlled != null ? Character.Controlled.WorldPosition : Vector2.Zero);
-                                    var retryChannel = (msgType == "Radio" || character == null) ? sound.Play(retryGain) : sound.Play(retryGain, 1500f, retryPos);
+                                    var retryChannel = (msgType == "Radio" || msgType == "Preview" || character == null) ? sound.Play(retryGain) : sound.Play(retryGain, 1500f, retryPos);
                                     if (retryChannel != null)
                                     {
-                                        if (Settings.EnableSuitMuffle && msgType == "MuffledLocal") retryChannel.Muffled = true;
+                                        if (msgType == "Preview") retryChannel.Muffled = false;
+                                        else if (Settings.EnableSuitMuffle && msgType == "MuffledLocal") retryChannel.Muffled = true;
                                         else retryChannel.Muffled = false;
                                         
                                         lock (activeVoiceChannels) { activeVoiceChannels.Add(Tuple.Create(retryChannel, character, msgType)); }
@@ -523,11 +715,20 @@ public static class TTSManager
 
     public static bool IsWearingHelmetOrClosedSuit(Character character)
     {
-        if (character == null || character.Inventory == null) return false;
+        if (character == null) return false;
 
         try
         {
-            // 1. Check Head slot directly for diving helmet, mask or face-covering gear
+            // 1. If character has their face covered by status effects (helmets, masks, vanilla suits)
+            try
+            {
+                if (character.HideFace) return true;
+            }
+            catch { }
+
+            if (character.Inventory == null) return false;
+
+            // 2. Check Head slot directly for diving helmet, diving mask, or breathing gear
             Item headItem = null;
             try
             {
@@ -543,19 +744,9 @@ public static class TTSManager
                 {
                     return true;
                 }
-
-                try
-                {
-                    var wearable = headItem.GetComponent<Barotrauma.Items.Components.Wearable>();
-                    if (wearable != null && wearable.HideFace)
-                    {
-                        return true;
-                    }
-                }
-                catch { }
             }
 
-            // 2. Check OuterClothes (Suit) slot
+            // 3. Check OuterClothes (Suit) slot
             Item outerItem = null;
             try
             {
@@ -567,44 +758,27 @@ public static class TTSManager
             {
                 if (outerItem.HasTag("divingsuit") || outerItem.HasTag("deepdiving") || outerItem.HasTag("deepdivinglarge"))
                 {
-                    // Full enclosed suit (vanilla style) covers head/face or hides limb Head.
-                    // Modular suit body (Tidebreakers) does NOT hide head/face and has separate helmet.
+                    // Check if this outer suit has an integrated head cover (like vanilla suits)
+                    // or is a modular body suit without head coverage (like Tidebreakers)
                     try
                     {
                         var wearable = outerItem.GetComponent<Barotrauma.Items.Components.Wearable>();
                         if (wearable != null)
                         {
-                            if (wearable.HideFace || wearable.HideLimb(LimbType.Head))
+                            var limbField = wearable.GetType().GetField("limbType", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+                            if (limbField != null && limbField.GetValue(wearable) is LimbType[] limbs)
                             {
-                                return true;
-                            }
-
-                            var spritesProp = wearable.GetType().GetProperty("WearableSprites");
-                            if (spritesProp != null && spritesProp.GetValue(wearable) is System.Collections.IEnumerable sprites)
-                            {
-                                foreach (var s in sprites)
+                                if (Array.IndexOf(limbs, LimbType.Head) >= 0)
                                 {
-                                    var limbProp = s.GetType().GetProperty("Limb");
-                                    var limbVal = limbProp != null ? limbProp.GetValue(s)?.ToString() : null;
-                                    if (limbVal == "Head")
-                                    {
-                                        var hideOtherProp = s.GetType().GetProperty("HideOtherWearables");
-                                        if (hideOtherProp != null && (bool)hideOtherProp.GetValue(s))
-                                        {
-                                            return true;
-                                        }
-                                    }
+                                    return true; // Suit has integrated head/helmet piece
                                 }
+                                return false; // Modular suit body without head piece (Tidebreakers)
                             }
-
-                            // It's a modular body suit without built-in head cover (Tidebreakers).
-                            // Since head slot was not a helmet, head is open!
-                            return false;
                         }
                     }
                     catch { }
 
-                    // Fallback if wearable component is null: muffled only if head is also covered
+                    // Fallback: only consider muffled if head is also covered
                     if (headItem != null) return true;
                 }
             }
@@ -655,11 +829,86 @@ public static class TTSManager
         catch { }
     }
 
+    public static string GetDeterministicBotVoice(string charName, bool isFemale)
+    {
+        int hash = Math.Abs(charName.GetHashCode());
+        if (IsChineseLanguage)
+        {
+            if (isFemale)
+            {
+                string[] zhFemale = { "zh_xiao_ya", "zh_xiao_ya_medic", "zh_chaowen", "zh_chaowen_captain", "zh_chaowen_engineer" };
+                return zhFemale[hash % zhFemale.Length];
+            }
+            else
+            {
+                string[] zhMale = { "zh_huayan", "zh_huayan_officer", "zh_huayan_cadet" };
+                return zhMale[hash % zhMale.Length];
+            }
+        }
+        if (isFemale)
+        {
+            string[] sileroFemale = { "baya", "kseniya", "xenia" };
+            return sileroFemale[hash % sileroFemale.Length];
+        }
+        else
+        {
+            string[] sileroMale = { "aidar", "eugene" };
+            return sileroMale[hash % sileroMale.Length];
+        }
+    }
+
     public static void Speak(Character character, string text, string msgType = "Default")
     {
         if (string.IsNullOrWhiteSpace(text)) return;
-        if (character != null && character.IsBot && !Settings.EnableBotTTS) return;
-        string charName = character != null ? character.Name : "Server";
+        if (character == null) return;
+        if (text.StartsWith("[BaroVoices", StringComparison.OrdinalIgnoreCase) || text.StartsWith("[TTS", StringComparison.OrdinalIgnoreCase)) return;
+        if (msgType == "Server" || msgType == "MessageBox" || msgType == "Console" || msgType == "ServerMessageBox") return;
+        if (character.IsBot && !Settings.EnableBotTTS) return;
+        string charName = character.Name;
+
+        if (character.IsBot)
+        {
+            string botVoice = "aidar";
+            string botEngine = "silero";
+            int botSpeed = 0;
+
+            if (BotVoices.TryGetValue(charName, out var assignment) && assignment != null)
+            {
+                botVoice = string.IsNullOrEmpty(assignment.VoiceId) ? "aidar" : assignment.VoiceId;
+                botEngine = string.IsNullOrEmpty(assignment.Engine) ? "silero" : assignment.Engine;
+                botSpeed = assignment.Speed;
+            }
+            else if (Settings.EnableUniqueVoices)
+            {
+                bool isFemale = IsFemaleCharacter(character);
+                botVoice = GetDeterministicBotVoice(charName, isFemale);
+                botEngine = (IsChineseLanguage || botVoice.StartsWith("zh_")) ? "piper" : "silero";
+            }
+
+            float botDistance = 0f;
+            Vector2 lPos = Character.Controlled != null ? Character.Controlled.WorldPosition : (GameMain.GameScreen.Cam != null ? GameMain.GameScreen.Cam.WorldViewCenter : Vector2.Zero);
+            if (lPos != Vector2.Zero)
+            {
+                botDistance = Vector2.Distance(lPos, character.WorldPosition);
+            }
+
+            if (msgType != "Radio" && botDistance > 4000f)
+            {
+                TTSManager.Log($"[BaroVoices TTS] Skipped bot generation for {charName}. Too far away ({botDistance}).");
+                return;
+            }
+
+            int finalRate = Settings.BaseRate + botSpeed;
+            int finalVolume = Settings.GlobalVolume;
+            int finalBoost = Settings.VolumeBoost;
+            string finalMsgType = msgType;
+
+            ParseEmotions(text, ref finalBoost);
+            CheckCharacterState(character, ref finalRate, ref finalBoost, ref finalMsgType);
+
+            SendTTSRequest(character, text, botVoice, finalRate, finalVolume, finalMsgType, botDistance, finalBoost, botEngine);
+            return;
+        }
 
         string voice = Settings.VoiceName;
         if (string.IsNullOrEmpty(voice)) voice = "baya";
@@ -674,34 +923,13 @@ public static class TTSManager
             int hash = character != null ? character.ID : Math.Abs(charName.GetHashCode());
             if (character != null && character.Info != null)
             {
-                string genderStr = "";
-                try 
-                {
-                    var infoType = character.Info.GetType();
-                    var gField = infoType.GetField("Gender", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (gField != null) genderStr = gField.GetValue(character.Info)?.ToString() ?? "";
-                    else 
-                    {
-                        var gProp = infoType.GetProperty("Gender", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                        if (gProp != null) genderStr = gProp.GetValue(character.Info)?.ToString() ?? "";
-                    }
-
-                    if (string.IsNullOrEmpty(genderStr))
-                    {
-                        var pProp = infoType.GetProperty("Pronouns", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                        if (pProp != null) genderStr = pProp.GetValue(character.Info)?.ToString() ?? "";
-                    }
-                } 
-                catch { }
-
-                if (genderStr.IndexOf("Female", StringComparison.OrdinalIgnoreCase) >= 0 || genderStr.IndexOf("She", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (IsFemaleCharacter(character))
                 {
                     string[] femaleVoices = { "baya", "kseniya", "xenia" };
                     voice = femaleVoices[hash % femaleVoices.Length];
                 }
                 else
                 {
-
                     string[] maleVoices = { "aidar", "eugene" };
                     voice = maleVoices[hash % maleVoices.Length];
                 }
@@ -726,23 +954,31 @@ public static class TTSManager
             return;
         }
 
-        int finalRate = Settings.BaseRate;
-        int finalVolume = Settings.GlobalVolume;
-        int finalBoost = Settings.VolumeBoost;
-        string finalMsgType = msgType;
+        int pFinalRate = Settings.BaseRate;
+        int pFinalVolume = Settings.GlobalVolume;
+        int pFinalBoost = Settings.VolumeBoost;
+        string pFinalMsgType = msgType;
 
-        ParseEmotions(text, ref finalBoost);
-        CheckCharacterState(character, ref finalRate, ref finalBoost, ref finalMsgType);
+        ParseEmotions(text, ref pFinalBoost);
+        CheckCharacterState(character, ref pFinalRate, ref pFinalBoost, ref pFinalMsgType);
 
-        SendTTSRequest(character, text, voice, finalRate, finalVolume, finalMsgType, distance, finalBoost);
+        SendTTSRequest(character, text, voice, pFinalRate, pFinalVolume, pFinalMsgType, distance, pFinalBoost);
     }
 
     public static void SpeakWithCustom(Character character, string text, string customVoice, int customRate, string msgType = "Default", string customEngine = "")
     {
         if (string.IsNullOrWhiteSpace(text)) return;
-        if (character != null && character.IsBot && !Settings.EnableBotTTS) return;
+        if (character == null) return;
+        if (text.StartsWith("[BaroVoices", StringComparison.OrdinalIgnoreCase) || text.StartsWith("[TTS", StringComparison.OrdinalIgnoreCase)) return;
+        if (msgType == "Server" || msgType == "MessageBox" || msgType == "Console" || msgType == "ServerMessageBox") return;
+        if (character.IsBot && !Settings.EnableBotTTS) return;
         
         string voice = string.IsNullOrEmpty(customVoice) ? "baya" : customVoice;
+        string engine = customEngine;
+        if (character.IsBot && string.IsNullOrEmpty(engine))
+        {
+            engine = "silero";
+        }
         
         float distance = 0f;
         Vector2 listenerPos = Character.Controlled != null ? Character.Controlled.WorldPosition : (GameMain.GameScreen.Cam != null ? GameMain.GameScreen.Cam.WorldViewCenter : Vector2.Zero);
@@ -765,12 +1001,26 @@ public static class TTSManager
         ParseEmotions(text, ref finalBoost);
         CheckCharacterState(character, ref finalRate, ref finalBoost, ref finalMsgType);
 
-        SendTTSRequest(character, text, voice, finalRate, finalVolume, finalMsgType, distance, finalBoost, customEngine);
+        SendTTSRequest(character, text, voice, finalRate, finalVolume, finalMsgType, distance, finalBoost, engine);
+    }
+
+    public static void PreviewVoice(string text, string voice, int speed, string engine)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        int finalRate = Settings.BaseRate + speed;
+        int finalVolume = Settings.GlobalVolume;
+        int finalBoost = Settings.VolumeBoost;
+        string finalEngine = string.IsNullOrEmpty(engine) ? Settings.TTSEngine : engine;
+        string finalVoice = string.IsNullOrEmpty(voice) ? "baya" : voice;
+
+        TTSManager.Log($"[BaroVoices TTS] PreviewVoice: text='{text}', voice='{finalVoice}', engine='{finalEngine}'");
+        SendTTSRequest(null, text, finalVoice, finalRate, finalVolume, "Preview", 0f, finalBoost, finalEngine);
     }
 
     public static void Initialize()
     {
         LoadSettings();
+        LoadBotVoices();
     }
 
     public static bool IsMacOS()
@@ -901,6 +1151,64 @@ public static class TTSManager
             LuaCsLogger.LogError("[BaroVoices TTS] Failed to save settings: " + ex.Message);
         }
     }
+
+    public static void LoadBotVoices()
+    {
+        try
+        {
+            BotVoices.Clear();
+            string path = "TTSBotVoices.txt";
+            if (File.Exists(path))
+            {
+                string[] lines = File.ReadAllLines(path);
+                foreach (string line in lines)
+                {
+                    if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#")) continue;
+                    string[] parts = line.Split('=');
+                    if (parts.Length == 2)
+                    {
+                        string botName = parts[0].Trim();
+                        string[] vals = parts[1].Split(',');
+                        string vId = vals.Length > 0 ? vals[0].Trim() : "aidar";
+                        string eng = vals.Length > 1 ? vals[1].Trim() : "silero";
+                        int spd = 0;
+                        if (vals.Length > 2) int.TryParse(vals[2].Trim(), out spd);
+                        BotVoices[botName] = new BotVoiceAssignment
+                        {
+                            BotName = botName,
+                            VoiceId = vId,
+                            Engine = string.IsNullOrEmpty(eng) ? "silero" : eng,
+                            Speed = spd
+                        };
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            TTSManager.Log("[BaroVoices TTS] LoadBotVoices Error: " + ex.Message);
+        }
+    }
+
+    public static void SaveBotVoices()
+    {
+        try
+        {
+            var lines = new List<string> { "# BaroVoices TTS - Bot Voice Catalog Assignments", "# BotName=VoiceId,Engine,Speed" };
+            foreach (var kvp in BotVoices)
+            {
+                if (kvp.Value != null)
+                {
+                    lines.Add($"{kvp.Key}={kvp.Value.VoiceId},{kvp.Value.Engine},{kvp.Value.Speed}");
+                }
+            }
+            File.WriteAllLines("TTSBotVoices.txt", lines);
+        }
+        catch (Exception ex)
+        {
+            LuaCsLogger.LogError("[BaroVoices TTS] Failed to save bot voices: " + ex.Message);
+        }
+    }
 }
 
 public static class TTSModMenu
@@ -988,6 +1296,77 @@ public static class TTSModMenu
         }
     }
 
+    public static string GetModPath(string relativePath)
+    {
+        try
+        {
+            string p1 = Path.Combine("LocalMods", "BaroVoices TTS", relativePath);
+            if (File.Exists(p1) || Directory.Exists(p1)) return p1;
+
+            string asmLoc = Path.GetDirectoryName(typeof(TTSModPlugin).Assembly.Location);
+            if (!string.IsNullOrEmpty(asmLoc))
+            {
+                string p2 = Path.GetFullPath(Path.Combine(asmLoc, "..", "..", relativePath));
+                if (File.Exists(p2) || Directory.Exists(p2)) return p2;
+            }
+        }
+        catch { }
+
+        return Path.Combine("LocalMods", "BaroVoices TTS", relativePath);
+    }
+
+    public static bool StartServerProcess()
+    {
+        try
+        {
+            int p = (int)Environment.OSVersion.Platform;
+            bool isUnix = (p == 4) || (p == 6) || (p == 128);
+            string scriptName = isUnix ? "start_server.sh" : "start_server.bat";
+            string scriptPath = GetModPath(scriptName);
+
+            if (!File.Exists(scriptPath))
+            {
+                TTSManager.Log("[BaroVoices TTS] StartServer: Script not found: " + scriptPath);
+                return false;
+            }
+
+            string fullPath = Path.GetFullPath(scriptPath);
+            string langArg = TTSManager.IsRussianLanguage ? "ru" : (TTSManager.IsChineseLanguage ? "zh" : "en");
+
+            if (isUnix)
+            {
+                try { Process.Start("chmod", $"+x \"{fullPath}\""); } catch { }
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "/bin/bash",
+                    Arguments = $"-c \"x-terminal-emulator -e \\\"bash '{fullPath}' {langArg}\\\" || gnome-terminal -- bash '{fullPath}' {langArg} || konsole -e bash '{fullPath}' {langArg} || xfce4-terminal -e \\\"bash '{fullPath}' {langArg}\\\" || alacritty -e bash '{fullPath}' {langArg} || kitty bash '{fullPath}' {langArg} || xterm -e bash '{fullPath}' {langArg}\"",
+                    UseShellExecute = false
+                });
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c start \"BaroVoices TTS Server\" \"{fullPath}\" {langArg}",
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(fullPath)
+                });
+            }
+
+            TTSManager.Log("[BaroVoices TTS] StartServer: Launched " + fullPath);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            TTSManager.Log("[BaroVoices TTS] StartServer error: " + ex.Message);
+            return false;
+        }
+    }
+
+    private static int activeTab = 0;
+    private static List<GUIButton> tabButtons = new List<GUIButton>();
+
     public static void ToggleMenu()
     {
         try
@@ -999,15 +1378,7 @@ public static class TTSModMenu
                 return;
             }
 
-            TTSManager.Log("[BaroVoices TTS] ToggleMenu: Creating new GUIFrame on GUI.PauseMenu...");
-            currentFrame = new GUIFrame(new RectTransform(new Vector2(0.55f, 0.65f), GUI.PauseMenu.RectTransform, Anchor.Center), "GUIFrame");
-            currentFrame.CanBeFocused = true;
-            
-            var mainHorizontal = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), currentFrame.RectTransform, Anchor.Center), isHorizontal: true)
-            {
-                Stretch = true,
-                RelativeSpacing = 0.02f
-            };
+            TTSManager.Log("[BaroVoices TTS] ToggleMenu: Initializing Vocal Terminal...");
 
             bool isRussian = false;
             bool isChinese = false;
@@ -1030,466 +1401,1112 @@ public static class TTSModMenu
             TTSManager.IsRussianLanguage = isRussian;
             TTSManager.IsChineseLanguage = isChinese;
 
-            string tabGameplay = TTSManager.GetLoc("Геймплей", "游戏玩法", "Gameplay");
-            string tabServer = TTSManager.GetLoc("Оптимизация", "优化与服务器", "Server & Perf");
-            string tabPersonal = TTSManager.GetLoc("Мой голос", "我的声音", "My Voice");
-            string titleText = TTSManager.GetLoc("Настройки TTS", "语音设置 (TTS)", "BaroVoices TTS");
-            string closeText = TTSManager.GetLoc("Закрыть", "关闭", "Close");
+            // Draft copy of settings for Cancel / Apply workflow
+            int draftGlobalVolume = TTSManager.GlobalVolume;
+            int draftVolumeBoost = TTSManager.VolumeBoost;
+            int draftBaseRate = TTSManager.BaseRate;
+            bool draftEnableUniqueVoices = TTSManager.EnableUniqueVoices;
+            bool draftEnableBotTTS = TTSManager.EnableBotTTS;
+            bool draftEnableVoiceQueue = TTSManager.EnableVoiceQueue;
+            bool draftEnableSuitMuffle = TTSManager.EnableSuitMuffle;
+            bool draftEnableRadioFilter = TTSManager.EnableRadioFilter;
+            string draftTTSEngine = TTSManager.TTSEngine;
+            int draftSampleRate = TTSManager.SampleRate;
+            string draftVoiceName = TTSManager.VoiceName;
+            int draftMySpeed = TTSManager.MySpeed;
 
-            var tabBar = new GUILayoutGroup(new RectTransform(new Vector2(0.3f, 1f), mainHorizontal.RectTransform))
+            string iconAtlasPath = GetModPath(Path.Combine("Content", "UI", "BaroVoicesIcons_v2.png"));
+            bool hasIcons = File.Exists(iconAtlasPath);
+
+            RectTransform parentTransform = GUI.PauseMenu?.RectTransform;
+            currentFrame = new GUIFrame(new RectTransform(new Vector2(0.70f, 0.78f), parentTransform, Anchor.Center), "GUIFrame");
+            currentFrame.CanBeFocused = true;
+
+            var outerLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.96f, 0.95f), currentFrame.RectTransform, Anchor.Center))
             {
                 Stretch = false,
-                RelativeSpacing = 0.05f
+                RelativeSpacing = 0.015f
             };
 
-            var contentArea = new GUIFrame(new RectTransform(new Vector2(0.7f, 1f), mainHorizontal.RectTransform), style: null);
-
-            TTSManager.CheckServerStatusAsync();
-
-            Action createGameplayTab = () => 
+            // Top Header Console Bar
+            var headerRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.06f), outerLayout.RectTransform), isHorizontal: true)
             {
-                contentArea.ClearChildren();
-                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), contentArea.RectTransform, Anchor.Center)) { RelativeSpacing = 0.02f };
+                Stretch = false,
+                RelativeSpacing = 0.02f
+            };
 
-                new GUITextBlock(new RectTransform(new Vector2(1f, 0.06f), layout.RectTransform), tabGameplay, textAlignment: Alignment.Center);
-                
-                string hint1 = TTSManager.GetLoc("Настройки геймплея. Действуют на всех игроков.", "游戏设置。适用于所有玩家。", "Gameplay settings. Apply to all players.");
-                new GUITextBlock(new RectTransform(new Vector2(1f, 0.10f), layout.RectTransform), hint1, textAlignment: Alignment.TopCenter, wrap: true) { TextColor = Color.LightCyan };
+            string terminalTitle = TTSManager.GetLoc("BAROVOICES TTS // НАСТРОЙКИ МОДА", "BAROVOICES TTS // 模组设置", "BAROVOICES TTS // MOD SETTINGS");
+            var titleBlock = new GUITextBlock(new RectTransform(new Vector2(0.55f, 1f), headerRow.RectTransform), terminalTitle, textAlignment: Alignment.CenterLeft)
+            {
+                TextColor = new Color(80, 225, 210)
+            };
 
-                var audioBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.78f), layout.RectTransform), style: "InnerFrame");
-                var audioLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), audioBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.02f };
+            string initPrefix = isRussian ? "● Сервер: " : (isChinese ? "● 服务器: " : "● Server: ");
+            var headerStatus = new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), headerRow.RectTransform), initPrefix + TTSManager.ServerStatusText, textAlignment: Alignment.CenterRight);
+            headerStatus.TextColor = TTSManager.IsServerRunning ? Color.LimeGreen : Color.Tomato;
+            TTSManager.StatusLabelRef = headerStatus;
 
-                var volContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string volTxt = TTSManager.GetLoc("Общая Громкость: ", "全局音量：", "Global Volume: ");
-                var volLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), volContainer.RectTransform), volTxt + TTSManager.GlobalVolume + "%", textAlignment: Alignment.CenterLeft);
-                var volumeScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), volContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
+            // Main Split: Left Column (28%) & Right Column (72%)
+            var bodySplit = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.92f), outerLayout.RectTransform), isHorizontal: true)
+            {
+                Stretch = true,
+                RelativeSpacing = 0.02f
+            };
+
+            // LEFT COLUMN
+            var leftCol = new GUILayoutGroup(new RectTransform(new Vector2(0.28f, 1f), bodySplit.RectTransform))
+            {
+                Stretch = false,
+                RelativeSpacing = 0.015f
+            };
+
+            // Mod Poster Card with proper scaling inside frame
+            var posterCard = new GUIFrame(new RectTransform(new Vector2(1f, 0.36f), leftCol.RectTransform), style: "InnerFrame");
+            try
+            {
+                string posterPath = GetModPath("BaroVoices TTS.png");
+                if (File.Exists(posterPath))
                 {
-                    BarScroll = Math.Max(0f, Math.Min(1f, TTSManager.GlobalVolume / 100f))
-                };
-                volumeScroll.OnMoved = (scrollbar, value) => 
-                { 
-                    TTSManager.GlobalVolume = (int)(value * 100f); 
-                    volLabel.Text = volTxt + TTSManager.GlobalVolume + "%";
-                    return true; 
-                };
-                volumeScroll.ToolTip = TTSManager.GetLoc("Общая громкость мода. 100% = нормальная громкость в игре.", "全局模组音量。100% = 游戏正常音量。", "Global mod volume. 100% = normal in-game volume.");
+                    var posterSprite = new Sprite(posterPath, Vector2.Zero);
+                    var posterImg = new GUIImage(new RectTransform(new Vector2(0.94f, 0.94f), posterCard.RectTransform, Anchor.Center), posterSprite, scaleToFit: true);
+                    posterImg.CanBeFocused = false;
+                }
+            }
+            catch { }
 
-                var boostContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string boostTxt = TTSManager.GetLoc("Усиление (Boost): ", "音量增强 (Boost)：", "Volume Boost: ");
-                var boostLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), boostContainer.RectTransform), boostTxt + TTSManager.VolumeBoost + "%", textAlignment: Alignment.CenterLeft);
-                var boostScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), boostContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
+            var authorLabel = new GUITextBlock(new RectTransform(new Vector2(1f, 0.04f), leftCol.RectTransform), "BaroVoices TTS v1.2.3 • by VORON", textAlignment: Alignment.Center)
+            {
+                TextColor = Color.Gold
+            };
+
+            // Left Info Card
+            var leftInfoCard = new GUIFrame(new RectTransform(new Vector2(1f, 0.50f), leftCol.RectTransform), style: "InnerFrame");
+            var leftInfoLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.92f, 0.92f), leftInfoCard.RectTransform, Anchor.Center))
+            {
+                Stretch = false,
+                RelativeSpacing = 0.02f
+            };
+
+            string statusHead = TTSManager.GetLoc("ИНФОРМАЦИЯ", "系统信息", "INFORMATION");
+            new GUITextBlock(new RectTransform(new Vector2(1f, 0.12f), leftInfoLayout.RectTransform), statusHead, textAlignment: Alignment.CenterLeft)
+            {
+                TextColor = Color.White
+            };
+
+            string engineInfoText = TTSManager.GetLoc($"Движок: {draftTTSEngine.ToUpper()}", $"引擎：{draftTTSEngine.ToUpper()}", $"Engine: {draftTTSEngine.ToUpper()}");
+            new GUITextBlock(new RectTransform(new Vector2(1f, 0.12f), leftInfoLayout.RectTransform), engineInfoText, textAlignment: Alignment.CenterLeft)
+            {
+                TextColor = new Color(160, 220, 215)
+            };
+
+            var leftServerBtn = new GUIButton(new RectTransform(new Vector2(1f, 0.18f), leftInfoLayout.RectTransform), TTSManager.GetLoc("ЗАПУСТИТЬ СЕРВЕР", "启动服务器", "START SERVER"), Alignment.Center, "GUIButton");
+            leftServerBtn.TextColor = Color.LightGreen;
+            leftServerBtn.ToolTip = TTSManager.GetLoc("Запустить локальный сервер синтеза речи (start_server.bat).", "启动本地TTS语音服务器。", "Launch local TTS speech server (start_server.bat).");
+            leftServerBtn.OnClicked = (b, ud) =>
+            {
+                if (StartServerProcess())
                 {
-                    BarScroll = Math.Max(0f, Math.Min(1f, (TTSManager.VolumeBoost - 100f) / 400f))
-                };
-                boostScroll.OnMoved = (scrollbar, value) => 
-                { 
-                    TTSManager.VolumeBoost = 100 + (int)(value * 400f); 
-                    boostLabel.Text = boostTxt + TTSManager.VolumeBoost + "%";
-                    return true; 
-                };
-                boostScroll.ToolTip = TTSManager.GetLoc("Усиление звука до 500% (полезно, если голоса кажутся слишком тихими).", "将音量增强至最多500%（如果声音太小很有用）。", "Boosts audio up to 500% (useful if voices are too quiet).");
+                    leftServerBtn.Text = TTSManager.GetLoc("Запуск...", "正在启动...", "Starting...");
+                    TTSManager.CheckServerStatusAsync();
+                }
+                return true;
+            };
 
-                var speedContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.13f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string spdTxt = TTSManager.GetLoc("Базовая скорость: ", "基础语速：", "Base Speed: ");
-                var speedLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), speedContainer.RectTransform), spdTxt + TTSManager.BaseRate, textAlignment: Alignment.CenterLeft);
-                var speedScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), speedContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
+            string configTip = TTSManager.GetLoc(
+                "Конфиг: TTSModSettings.txt\n\nПри сбое Piper синтез автоматически переключается на Silero.",
+                "配置：TTSModSettings.txt\n\nPiper合成失败时将自动无缝降级为Silero。",
+                "Config: TTSModSettings.txt\n\nIf Piper fails, synthesis automatically falls back to Silero."
+            );
+            new GUITextBlock(new RectTransform(new Vector2(1f, 0.50f), leftInfoLayout.RectTransform), configTip, textAlignment: Alignment.TopLeft, wrap: true)
+            {
+                TextColor = Color.LightSlateGray
+            };
+
+            // Left Links Row
+            var leftLinks = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.07f), leftCol.RectTransform), isHorizontal: true)
+            {
+                Stretch = true,
+                RelativeSpacing = 0.04f
+            };
+
+            var boostyBtn = new GUIButton(new RectTransform(new Vector2(0.48f, 1f), leftLinks.RectTransform), "Boosty", Alignment.Center, "GUIButton");
+            boostyBtn.TextColor = Color.Gold;
+            boostyBtn.ToolTip = TTSManager.GetLoc("Поддержать автора на Boosty", "在Boosty上支持作者", "Support author on Boosty");
+            boostyBtn.OnClicked = (b, ud) =>
+            {
+                try { Process.Start(new ProcessStartInfo { FileName = "https://boosty.to/voron227", UseShellExecute = true }); } catch { }
+                return true;
+            };
+
+            var githubBtn = new GUIButton(new RectTransform(new Vector2(0.48f, 1f), leftLinks.RectTransform), "GitHub", Alignment.Center, "GUIButton");
+            githubBtn.TextColor = Color.LightCyan;
+            githubBtn.ToolTip = TTSManager.GetLoc("Репозиторий проекта на GitHub", "访问GitHub源码仓库", "Visit GitHub repository");
+            githubBtn.OnClicked = (b, ud) =>
+            {
+                try { Process.Start(new ProcessStartInfo { FileName = "https://github.com/VORON2272/BaroVoices-TTS", UseShellExecute = true }); } catch { }
+                return true;
+            };
+
+            // RIGHT COLUMN
+            var rightCol = new GUILayoutGroup(new RectTransform(new Vector2(0.72f, 1f), bodySplit.RectTransform))
+            {
+                Stretch = false,
+                RelativeSpacing = 0.015f
+            };
+
+            // Top Tab Buttons
+            var tabBar = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.08f), rightCol.RectTransform), isHorizontal: true)
+            {
+                Stretch = true,
+                RelativeSpacing = 0.02f
+            };
+
+            tabButtons.Clear();
+
+            // Right Central Card for Content
+            var contentCard = new GUIFrame(new RectTransform(new Vector2(1f, 0.81f), rightCol.RectTransform), style: "InnerFrame");
+
+            // Slider builder helper in Plag / Terminal style
+            void AddSlider(GUILayoutGroup parent, string title, float curVal, float minVal, float maxVal, Func<float, string> format, Action<float> onMove, string tip = "", bool isBoost = false)
+            {
+                var sGroup = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.18f), parent.RectTransform)) { RelativeSpacing = 0.02f };
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.40f), sGroup.RectTransform), title, textAlignment: Alignment.CenterLeft)
                 {
-                    BarScroll = Math.Max(0f, Math.Min(1f, (TTSManager.BaseRate + 10f) / 20f))
+                    TextColor = Color.LightGray
                 };
-                speedScroll.OnMoved = (scrollbar, value) => 
-                { 
-                    TTSManager.BaseRate = (int)((value * 20f) - 10f); 
-                    speedLabel.Text = spdTxt + TTSManager.BaseRate;
-                    return true; 
-                };
-                speedScroll.ToolTip = TTSManager.GetLoc("Скорость чтения для всех персонажей. 0 = нормальная.", "所有角色的基础阅读速度。0 = 正常。", "Base reading speed for all characters. 0 = normal.");
 
-                var checksRow1 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.12f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+                var row = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.55f), sGroup.RectTransform), isHorizontal: true) { RelativeSpacing = 0.03f };
 
-                string uniqTxt = TTSManager.GetLoc("Авто-выбор голосов", "自动分配声音", "Auto-assign voices");
-                var uniqueBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow1.RectTransform), uniqTxt)
+                var sb = new GUIScrollBar(new RectTransform(new Vector2(0.72f, 1f), row.RectTransform), barSize: 0.08f, style: "GUISlider")
                 {
-                    Selected = TTSManager.EnableUniqueVoices,
-                    ToolTip = TTSManager.GetLoc("Боты и другие игроки получат случайный подходящий им голос.", "为机器人/玩家分配随机合适的声音。", "Assigns a random fitting voice to bots/players.")
+                    BarScroll = Math.Max(0f, Math.Min(1f, (curVal - minVal) / (maxVal - minVal)))
                 };
-                uniqueBox.OnSelected = (tickBox) => 
-                { 
-                    TTSManager.EnableUniqueVoices = tickBox.Selected; 
-                    return true; 
-                };
+                if (!string.IsNullOrEmpty(tip)) sb.ToolTip = tip;
 
-                var botBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow1.RectTransform), TTSManager.GetLoc("Озвучка Ботов", "启用机器人语音 (TTS)", "Enable Bot TTS"))
+                var lbl = new GUITextBlock(new RectTransform(new Vector2(0.25f, 1f), row.RectTransform), format(curVal), textAlignment: Alignment.CenterRight);
+                lbl.TextColor = (isBoost && curVal > 100f) ? new Color(255, 195, 60) : new Color(64, 210, 195);
+
+                sb.OnMoved = (scrollbar, scroll) =>
                 {
-                    Selected = TTSManager.EnableBotTTS,
-                    ToolTip = TTSManager.GetLoc("Нужно ли озвучивать фразы ИИ ботов (экипажа, бандитов).", "是否生成并播放AI机器人的对话。", "Should AI bot dialogues be generated and played.")
+                    float calculated = minVal + scroll * (maxVal - minVal);
+                    onMove(calculated);
+                    lbl.Text = format(calculated);
+                    lbl.TextColor = (isBoost && calculated > 100f) ? new Color(255, 195, 60) : new Color(64, 210, 195);
+                    return true;
                 };
-                botBox.OnSelected = (tickBox) => 
-                { 
-                    TTSManager.EnableBotTTS = tickBox.Selected; 
-                    return true; 
-                };
+            }
 
-                var checksRow2 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.12f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
+            Action renderActiveTab = null;
 
-                string queueTxt = TTSManager.GetLoc("Очередь сообщений", "语音排队模式", "Voice Queue");
-                var queueBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow2.RectTransform), queueTxt)
+            // Tab 0: Gameplay / General Settings
+            Action showGameplayTab = () =>
+            {
+                contentCard.ClearChildren();
+                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), contentCard.RectTransform, Anchor.Center)) { RelativeSpacing = 0.04f };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), TTSManager.GetLoc("ОСНОВНЫЕ НАСТРОЙКИ", "基础设置", "GENERAL SETTINGS"), textAlignment: Alignment.CenterLeft)
                 {
-                    Selected = TTSManager.EnableVoiceQueue,
-                    ToolTip = TTSManager.GetLoc("Фразы одного персонажа проигрываются по очереди, предотвращая наслоение звуков.", "按顺序播放同一角色的语音，防止声音重叠混杂。", "Plays voice messages sequentially per character, preventing overlapping audio.")
-                };
-                queueBox.OnSelected = (tickBox) => 
-                { 
-                    TTSManager.EnableVoiceQueue = tickBox.Selected; 
-                    return true; 
+                    TextColor = Color.White
                 };
 
-                string muffleTxt = TTSManager.GetLoc("Глушить в скафандрах", "潜水服/头盔闷音", "Muffle in Suits");
-                var muffleBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow2.RectTransform), muffleTxt)
+                var box1 = new GUITickBox(new RectTransform(new Vector2(1f, 0.12f), layout.RectTransform), TTSManager.GetLoc("Авто-выбор голосов для экипажа", "为船员与玩家自动分配音色", "Auto-assign voices for crew"))
                 {
-                    Selected = TTSManager.EnableSuitMuffle,
-                    ToolTip = TTSManager.GetLoc("Приглушает голос внутри закрытого шлема или под водой. Отключите, если используете конфликтующие моды на броню.", "在密闭头盔内和水下使声音发闷。如果使用冲突的护甲模组可关闭。", "Muffles voice inside closed helmets or underwater. Disable if using conflicting armor mods.")
+                    Selected = draftEnableUniqueVoices,
+                    ToolTip = TTSManager.GetLoc("Каждый бот и игрок получит подходящий уникальный голос.", "根据身份与性别为角色自动指派合适的声音。", "Assigns fitting random voices to crew members.")
                 };
-                muffleBox.OnSelected = (tickBox) => 
-                { 
-                    TTSManager.EnableSuitMuffle = tickBox.Selected; 
-                    return true; 
-                };
+                box1.OnSelected = (tb) => { draftEnableUniqueVoices = tb.Selected; return true; };
 
-                var checksRow3 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.12f), audioLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-
-                string radioTxt = TTSManager.GetLoc("Эффект рации", "无线电对讲机音效", "Radio Filter");
-                var radioBox = new GUITickBox(new RectTransform(new Vector2(0.95f, 1f), checksRow3.RectTransform), radioTxt)
+                var box2 = new GUITickBox(new RectTransform(new Vector2(1f, 0.12f), layout.RectTransform), TTSManager.GetLoc("Озвучивать ботов (Bot TTS)", "启用机器人语音 (Bot TTS)", "Enable Bot TTS"))
                 {
-                    Selected = TTSManager.EnableRadioFilter,
-                    ToolTip = TTSManager.GetLoc("Применяет тактический частотный фильтр и шум рации к сообщениям. Отключите для кристально чистого звука.", "应用无线电战术滤波和杂音。关闭以获得无杂音的清晰语音。", "Applies tactical bandpass filter and subtle static to radio chat. Disable for crystal-clear audio.")
+                    Selected = draftEnableBotTTS,
+                    ToolTip = TTSManager.GetLoc("Синтезирует речь ботов экипажа и NPC при отправке команд и реплик.", "朗读AI船员与NPC发出的文字指令和对话。", "Synthesizes speech for AI bots and NPC dialogues.")
                 };
-                radioBox.OnSelected = (tickBox) => 
-                { 
-                    TTSManager.EnableRadioFilter = tickBox.Selected; 
-                    return true; 
+                box2.OnSelected = (tb) => { draftEnableBotTTS = tb.Selected; return true; };
+
+                var box3 = new GUITickBox(new RectTransform(new Vector2(1f, 0.12f), layout.RectTransform), TTSManager.GetLoc("Очередь сообщений (Anti-overlap)", "语音队列模式 (防重叠)", "Voice Queue (Anti-overlap)"))
+                {
+                    Selected = draftEnableVoiceQueue,
+                    ToolTip = TTSManager.GetLoc("Фразы одного персонажа воспроизводятся по очереди, не перебивая друг друга.", "同一角色的语句按顺序排队播放，防止音频互相叠音刺耳。", "Sequential playback per character to prevent overlapping audio.")
+                };
+                box3.OnSelected = (tb) => { draftEnableVoiceQueue = tb.Selected; return true; };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.35f), layout.RectTransform),
+                    TTSManager.GetLoc(
+                        "Подсказка: Данные настройки влияют на воспроизведение речи на вашей подлодке. Изменения сохраняются локально.",
+                        "提示：此配置将应用于您潜艇上接收到的所有TTS语音。配置保存在本地。",
+                        "Tip: These settings affect voice messages playback on your submarine. Changes are saved locally."
+                    ),
+                    textAlignment: Alignment.TopLeft, wrap: true)
+                {
+                    TextColor = Color.LightSlateGray
                 };
             };
 
-            Action createServerTab = () => 
+            // Current filter state for Tab 1
+            string activeLangFilter = isRussian ? "ru" : (isChinese ? "zh" : "all");
+            string activeEngineFilter = "all"; // "all", "silero", "piper"
+
+            // Tab 1: My Voice
+            Action showVoiceTab = null;
+            showVoiceTab = () =>
             {
-                contentArea.ClearChildren();
-                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), contentArea.RectTransform, Anchor.Center)) { RelativeSpacing = 0.02f };
+                contentCard.ClearChildren();
+                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.96f, 0.96f), contentCard.RectTransform, Anchor.Center)) { RelativeSpacing = 0.015f };
 
-                new GUITextBlock(new RectTransform(new Vector2(1f, 0.06f), layout.RectTransform), tabServer, textAlignment: Alignment.Center);
-                
-                string hint1 = TTSManager.GetLoc("Сервер, производительность и качество голоса.", "服务器、性能和音质设置。", "Server, performance and quality settings.");
-                new GUITextBlock(new RectTransform(new Vector2(1f, 0.10f), layout.RectTransform), hint1, textAlignment: Alignment.TopCenter, wrap: true) { TextColor = Color.LightCyan };
+                // 1. Top row: Title + Current Selected Voice Info
+                var topRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.06f), layout.RectTransform), isHorizontal: true);
+                new GUITextBlock(new RectTransform(new Vector2(0.35f, 1f), topRow.RectTransform), TTSManager.GetLoc("МОЙ ГОЛОС", "我的声音", "MY VOICE"), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.White
+                };
 
-                var serverBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.28f), layout.RectTransform), style: "InnerFrame");
-                var serverLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.9f), serverBlock.RectTransform, Anchor.Center), isHorizontal: false) { RelativeSpacing = 0.05f };
-                string statusPrefix = TTSManager.GetLoc("Статус Сервера TTS: ", "TTS 服务器状态：", "TTS Server Status: ");
-                var statusLabel = new GUITextBlock(new RectTransform(new Vector2(1f, 0.4f), serverLayout.RectTransform), statusPrefix + TTSManager.ServerStatusText, textAlignment: Alignment.Center);
-                statusLabel.TextColor = TTSManager.IsServerRunning ? Color.LimeGreen : Color.Tomato;
-                TTSManager.StatusLabelRef = statusLabel;
+                VoiceDef currentDef = TTSManager.AvailableVoiceDefs.Find(vd => vd.Id == draftVoiceName && vd.Engine == draftTTSEngine);
+                if (currentDef == null)
+                {
+                    currentDef = TTSManager.AvailableVoiceDefs.Find(vd => vd.Id == draftVoiceName) 
+                              ?? TTSManager.AvailableVoiceDefs.Find(vd => vd.Engine == draftTTSEngine) 
+                              ?? TTSManager.AvailableVoiceDefs[0];
+                }
 
-                string startBtnTxt = TTSManager.GetLoc("► ЗАПУСТИТЬ СЕРВЕР", "► 启动服务器", "► START SERVER");
-                var startBtn = new GUIButton(new RectTransform(new Vector2(0.7f, 0.45f), serverLayout.RectTransform, Anchor.TopCenter), startBtnTxt, Alignment.Center, "GUIButton");
-                startBtn.TextColor = Color.LightGreen;
-                startBtn.OnClicked = (btn, ud) =>
+                string currentInfoText = TTSManager.GetLoc("Выбран: ", "当前选择: ", "Selected: ") 
+                    + $"{currentDef.GetName()} [{(currentDef.Engine == "piper" ? "Piper" : "Silero")}, {currentDef.Lang.ToUpper()}]";
+
+                new GUITextBlock(new RectTransform(new Vector2(0.65f, 1f), topRow.RectTransform), currentInfoText, textAlignment: Alignment.CenterRight)
+                {
+                    TextColor = new Color(80, 225, 210)
+                };
+
+                // 2. Filter Row: Language Chips + Engine Chips
+                var filterRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.065f), layout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.01f };
+
+                var langFilters = new (string key, string ru, string zh, string en)[]
+                {
+                    ("all", "Все", "全部", "All"),
+                    ("ru", "RU", "俄语 (RU)", "RU"),
+                    ("en", "EN", "英语 (EN)", "EN"),
+                    ("zh", "ZH", "中文 (ZH)", "ZH")
+                };
+
+                foreach (var lf in langFilters)
+                {
+                    bool isSelected = activeLangFilter == lf.key;
+                    var btn = new GUIButton(new RectTransform(new Vector2(0.095f, 1f), filterRow.RectTransform), TTSManager.GetLoc(lf.ru, lf.zh, lf.en), Alignment.Center, "GUIButton");
+                    if (isSelected)
+                    {
+                        btn.Color = new Color(20, 80, 70);
+                        btn.TextColor = Color.Turquoise;
+                    }
+                    else
+                    {
+                        btn.TextColor = Color.LightGray;
+                    }
+                    string k = lf.key;
+                    btn.OnClicked = (b, ud) =>
+                    {
+                        activeLangFilter = k;
+                        showVoiceTab();
+                        return true;
+                    };
+                }
+
+                // Spacer
+                new GUIFrame(new RectTransform(new Vector2(0.03f, 1f), filterRow.RectTransform), style: null);
+
+                var engFilters = new (string key, string ru, string zh, string en, float width)[]
+                {
+                    ("all", "Все движки", "全部引擎", "All Engines", 0.18f),
+                    ("silero", "Silero", "Silero", "Silero", 0.14f),
+                    ("piper", "Piper", "Piper", "Piper", 0.14f)
+                };
+
+                foreach (var ef in engFilters)
+                {
+                    bool isSelected = activeEngineFilter == ef.key;
+                    var btn = new GUIButton(new RectTransform(new Vector2(ef.width, 1f), filterRow.RectTransform), TTSManager.GetLoc(ef.ru, ef.zh, ef.en), Alignment.Center, "GUIButton");
+                    if (isSelected)
+                    {
+                        btn.Color = ef.key == "piper" ? new Color(20, 70, 90) : (ef.key == "silero" ? new Color(80, 60, 20) : new Color(40, 50, 60));
+                        btn.TextColor = ef.key == "piper" ? Color.LightSkyBlue : (ef.key == "silero" ? Color.Orange : Color.Turquoise);
+                    }
+                    else
+                    {
+                        btn.TextColor = Color.LightGray;
+                    }
+                    string k = ef.key;
+                    btn.OnClicked = (b, ud) =>
+                    {
+                        activeEngineFilter = k;
+                        showVoiceTab();
+                        return true;
+                    };
+                }
+
+                // 3. Scrollable List of Voice Cards
+                var listBox = new GUIListBox(new RectTransform(new Vector2(1f, 0.52f), layout.RectTransform));
+                listBox.Spacing = (int)(4 * GUI.Scale);
+
+                var displayedVoices = TTSManager.AvailableVoiceDefs.FindAll(vd =>
+                {
+                    if (activeLangFilter != "all" && vd.Lang != activeLangFilter) return false;
+                    if (activeEngineFilter != "all" && vd.Engine != activeEngineFilter) return false;
+                    return true;
+                });
+
+                if (displayedVoices.Count == 0)
+                {
+                    var emptyCard = new GUIFrame(new RectTransform(new Vector2(1f, 0.25f), listBox.Content.RectTransform), style: "InnerFrame");
+                    emptyCard.Color = new Color(22, 26, 32);
+                    new GUITextBlock(new RectTransform(Vector2.One, emptyCard.RectTransform), 
+                        TTSManager.GetLoc("Нет доступных голосов для выбранных фильтров", "所选筛选条件下无可用音色", "No voices available for selected filters"),
+                        textAlignment: Alignment.Center)
+                    {
+                        TextColor = Color.Gray
+                    };
+                }
+
+                foreach (var vDef in displayedVoices)
+                {
+                    bool isCurrent = (draftVoiceName == vDef.Id && draftTTSEngine == vDef.Engine);
+
+                    var rowCard = new GUIFrame(new RectTransform(new Vector2(1f, 0.20f), listBox.Content.RectTransform), style: "InnerFrame");
+                    rowCard.Color = isCurrent ? new Color(18, 50, 42) : new Color(22, 26, 32);
+
+                    var rowLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.98f, 0.90f), rowCard.RectTransform, Anchor.Center), isHorizontal: true)
+                    {
+                        RelativeSpacing = 0.015f
+                    };
+
+                    string genderTag = vDef.Gender == "female" 
+                        ? TTSManager.GetLoc("(Жен.)", "(女)", "(Fem)") 
+                        : TTSManager.GetLoc("(Муж.)", "(男)", "(Masc)");
+                    string selMark = isCurrent ? "● " : "   ";
+                    string engineTag = vDef.Engine == "piper" ? "[Piper]" : "[Silero]";
+                    string labelText = $"{selMark}{vDef.GetName()} {genderTag}  {engineTag} • {vDef.ModelTag}";
+
+                    var selectBtn = new GUIButton(new RectTransform(new Vector2(0.85f, 1f), rowLayout.RectTransform), labelText, Alignment.CenterLeft, "GUIButton");
+                    if (isCurrent)
+                    {
+                        selectBtn.Color = new Color(25, 90, 70);
+                        selectBtn.TextColor = Color.White;
+                    }
+                    else
+                    {
+                        selectBtn.TextColor = Color.LightGray;
+                    }
+
+                    VoiceDef capturedDef = vDef;
+                    selectBtn.OnClicked = (b, ud) =>
+                    {
+                        draftVoiceName = capturedDef.Id;
+                        draftTTSEngine = capturedDef.Engine;
+                        showVoiceTab();
+                        return true;
+                    };
+
+                    var quickPrevBtn = new GUIButton(new RectTransform(new Vector2(0.12f, 1f), rowLayout.RectTransform), "", Alignment.Center, "GUIButton");
+                    quickPrevBtn.ToolTip = TTSManager.GetLoc("Быстрое прослушивание этого голоса", "快速试听此音色", "Quickly preview this voice");
+
+                    if (hasIcons)
+                    {
+                        try
+                        {
+                            var playSprite = new Sprite(iconAtlasPath, new Rectangle(384, 0, 64, 64));
+                            var playImg = new GUIImage(new RectTransform(new Vector2(0.55f, 0.55f), quickPrevBtn.RectTransform, Anchor.Center), playSprite, scaleToFit: true)
+                            {
+                                CanBeFocused = false
+                            };
+                            playImg.Color = vDef.Engine == "piper" ? new Color(130, 210, 255) : new Color(255, 185, 100);
+                            playImg.HoverColor = Color.White;
+                            playImg.SelectedColor = Color.White;
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        quickPrevBtn.Text = ">";
+                        quickPrevBtn.TextColor = vDef.Engine == "piper" ? Color.LightSkyBlue : Color.Orange;
+                    }
+
+                    quickPrevBtn.OnClicked = (b, ud) =>
+                    {
+                        string sample = capturedDef.Lang == "ru" 
+                            ? "Внимание экипажу, проверка связи!" 
+                            : (capturedDef.Lang == "zh" ? "全体船员注意，无线电测试！" : "Attention crew, comms check!");
+                        TTSManager.PreviewVoice(sample, capturedDef.Id, draftMySpeed, capturedDef.Engine);
+                        return true;
+                    };
+                }
+
+                // 4. Speech Speed Slider
+                AddSlider(layout, TTSManager.GetLoc("МОЯ СКОРОСТЬ РЕЧИ", "个人语速调节", "MY SPEECH SPEED"), draftMySpeed, -10f, 10f,
+                    v => (v > 0 ? "+" : "") + ((int)v).ToString(),
+                    v => draftMySpeed = (int)v,
+                    TTSManager.GetLoc("Индивидуальная поправка скорости речи вашего персонажа.", "你个人的发音速度修饰符。", "Personal speaking speed modifier for your character."));
+
+                // 5. Action Buttons (Radio Test & Sync)
+                var voiceActions = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.03f };
+
+                var prevBtn = new GUIButton(new RectTransform(new Vector2(0.48f, 1f), voiceActions.RectTransform), TTSManager.GetLoc("> ТЕСТОВАЯ ФРАЗА (РАЦИЯ)", "> 测试对讲机发音", "> RADIO TEST PHRASE"), Alignment.Center, "GUIButton");
+                prevBtn.ToolTip = TTSManager.GetLoc("Прослушать выбранный голос с эффектом рации", "试听当前所选音色的无线电效果", "Preview selected voice with radio effect");
+                prevBtn.OnClicked = (b, ud) =>
+                {
+                    string sampleText = TTSManager.GetLoc("Внимание экипажу! Проверка связи, как слышно?", "全体船员注意！无线电通讯测试，收到请回答？", "Attention crew! Radio comms check, how do you copy?");
+                    TTSManager.PreviewVoice(sampleText, draftVoiceName, draftMySpeed, draftTTSEngine);
+                    return true;
+                };
+
+                var syncBtn = new GUIButton(new RectTransform(new Vector2(0.48f, 1f), voiceActions.RectTransform), TTSManager.GetLoc("СИНХРОНИЗИРОВАТЬ", "同步给队友", "SYNC WITH CREW"), Alignment.Center, "GUIButton");
+                syncBtn.TextColor = Color.LightGreen;
+                syncBtn.OnClicked = (b, ud) =>
+                {
+                    if (Character.Controlled == null)
+                    {
+                        syncBtn.Text = TTSManager.GetLoc("ТОЛЬКО В ИГРЕ!", "只能在游戏内！", "IN-GAME ONLY!");
+                        return true;
+                    }
+                    string v = string.IsNullOrEmpty(draftVoiceName) ? "baya" : draftVoiceName;
+                    string luaCmd = $"if SendMyVoiceSettings then SendMyVoiceSettings({TTSManager.MyPitch}, {draftMySpeed}, \"{v}\", \"{draftTTSEngine}\") end";
+                    try { GameMain.LuaCs.Lua?.DoString(luaCmd); } catch { }
+                    syncBtn.Text = TTSManager.GetLoc("СИНХРОНИЗИРОВАНО", "已同步", "SYNCED");
+                    return true;
+                };
+            };
+
+            // Tab 2: Crew Bot Voice Catalog
+            Action showBotsTab = null;
+            showBotsTab = () =>
+            {
+                contentCard.ClearChildren();
+                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), contentCard.RectTransform, Anchor.Center)) { RelativeSpacing = 0.02f };
+
+                // 1. Header
+                var topRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.07f), layout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.02f };
+                new GUITextBlock(new RectTransform(new Vector2(0.60f, 1f), topRow.RectTransform), TTSManager.GetLoc("КАТАЛОГ ГОЛОСОВ БОТОВ (ЭКИПАЖ)", "AI船员音色目录", "CREW BOT VOICE CATALOG"), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.White
+                };
+
+                // Fast action buttons in top row: Randomize Silero, Reset All
+                var randSileroBtn = new GUIButton(new RectTransform(new Vector2(0.20f, 1f), topRow.RectTransform), TTSManager.GetLoc("СЛУЧАЙНЫЕ", "随机分配", "RANDOM SILERO"), Alignment.Center, "GUIButton");
+                randSileroBtn.ToolTip = TTSManager.GetLoc("Назначить каждому боту случайный Silero голос по его полу", "根据性别为每名AI船员随机分配Silero音色", "Assign random Silero voice to each bot by gender");
+                randSileroBtn.OnClicked = (b, ud) =>
+                {
+                    var crew = TTSManager.GetCrewBots();
+                    var femaleSilero = new[] { "baya", "kseniya", "xenia" };
+                    var maleSilero = new[] { "aidar", "eugene" };
+                    var rnd = new Random();
+
+                    var names = new HashSet<string>(TTSManager.BotVoices.Keys, StringComparer.OrdinalIgnoreCase);
+                    foreach (var cb in crew) if (cb != null && !string.IsNullOrEmpty(cb.Name)) names.Add(cb.Name);
+
+                    foreach (var name in names)
+                    {
+                        var cb = crew.Find(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                        bool isFem = cb != null ? TTSManager.IsFemaleCharacter(cb) : (TTSManager.BotVoices.TryGetValue(name, out var ex) && ex.VoiceId != null && (ex.VoiceId == "baya" || ex.VoiceId == "kseniya" || ex.VoiceId == "xenia"));
+                        string chosenVoice = isFem ? femaleSilero[rnd.Next(femaleSilero.Length)] : maleSilero[rnd.Next(maleSilero.Length)];
+
+                        TTSManager.BotVoices[name] = new BotVoiceAssignment
+                        {
+                            BotName = name,
+                            VoiceId = chosenVoice,
+                            Engine = "silero",
+                            Speed = 0
+                        };
+                    }
+                    showBotsTab();
+                    return true;
+                };
+
+                var resetAllBotsBtn = new GUIButton(new RectTransform(new Vector2(0.18f, 1f), topRow.RectTransform), TTSManager.GetLoc("СБРОСИТЬ", "恢复默认", "RESET ALL"), Alignment.Center, "GUIButton");
+                resetAllBotsBtn.ToolTip = TTSManager.GetLoc("Сбросить все назначения ботов на автоматические", "将所有船员声音重置为自动默认分配", "Reset all bot assignments to automatic defaults");
+                resetAllBotsBtn.TextColor = Color.Salmon;
+                resetAllBotsBtn.OnClicked = (b, ud) =>
+                {
+                    TTSManager.BotVoices.Clear();
+                    showBotsTab();
+                    return true;
+                };
+
+                // Subtitle
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.045f), layout.RectTransform), TTSManager.GetLoc("Индивидуальная настройка голоса каждого бота. По умолчанию боты используют Silero.", "为每个AI船员自定义独立音色。默认统一使用Silero语音引擎。", "Customize individual voice for each bot. By default, bots use Silero engine."), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.Gray
+                };
+
+                // List of bots
+                var botListBox = new GUIListBox(new RectTransform(new Vector2(1f, 0.72f), layout.RectTransform));
+                botListBox.Spacing = (int)(4 * GUI.Scale);
+
+                var currentCrewBots = TTSManager.GetCrewBots();
+                var botNames = new List<string>();
+                foreach (var cb in currentCrewBots)
+                {
+                    if (cb != null && !string.IsNullOrEmpty(cb.Name) && !botNames.Contains(cb.Name))
+                    {
+                        botNames.Add(cb.Name);
+                    }
+                }
+                foreach (var k in TTSManager.BotVoices.Keys)
+                {
+                    if (!botNames.Contains(k))
+                    {
+                        botNames.Add(k);
+                    }
+                }
+
+                if (botNames.Count == 0)
+                {
+                    var emptyFrame = new GUIFrame(new RectTransform(new Vector2(1f, 0.3f), botListBox.Content.RectTransform), style: "InnerFrame");
+                    new GUITextBlock(new RectTransform(new Vector2(0.9f, 0.8f), emptyFrame.RectTransform, Anchor.Center), 
+                        TTSManager.GetLoc("В текущем раунде не найдено ботов экипажа.\nВы можете добавить имя бота вручную в строке ниже.", "当前回合未发现AI船员。\n您可以在下方手动输入船员名字添加配置。", "No crew bots found in current round.\nYou can manually register a bot name in the field below."),
+                        textAlignment: Alignment.Center)
+                    {
+                        TextColor = Color.LightGray
+                    };
+                }
+                else
+                {
+                    var voiceList = TTSManager.AvailableVoiceDefs;
+                    foreach (string bName in botNames)
+                    {
+                        string botName = bName;
+                        var liveBot = currentCrewBots.Find(cb => cb.Name.Equals(botName, StringComparison.OrdinalIgnoreCase));
+                        bool isFemale = liveBot != null 
+                            ? TTSManager.IsFemaleCharacter(liveBot) 
+                            : (TTSManager.BotVoices.TryGetValue(botName, out var exAssign) && (exAssign.VoiceId == "baya" || exAssign.VoiceId == "kseniya" || exAssign.VoiceId == "xenia"));
+
+                        if (!TTSManager.BotVoices.TryGetValue(botName, out var assign) || assign == null)
+                        {
+                            assign = new BotVoiceAssignment
+                            {
+                                BotName = botName,
+                                VoiceId = TTSManager.GetDeterministicBotVoice(botName, isFemale),
+                                Engine = "silero",
+                                Speed = 0
+                            };
+                            TTSManager.BotVoices[botName] = assign;
+                        }
+
+                        var botRow = new GUIFrame(new RectTransform(new Vector2(1f, 0.20f), botListBox.Content.RectTransform), style: "InnerFrame");
+                        botRow.Color = liveBot != null ? new Color(20, 35, 38) : new Color(24, 26, 30);
+
+                        var rowLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.98f, 0.90f), botRow.RectTransform, Anchor.Center), isHorizontal: true)
+                        {
+                            RelativeSpacing = 0.015f
+                        };
+
+                        // Bot Name & Gender & Status
+                        string genderTag = isFemale 
+                            ? TTSManager.GetLoc("(Жен.)", "(女)", "(Fem)") 
+                            : TTSManager.GetLoc("(Муж.)", "(男)", "(Masc)");
+                        string statusTag = liveBot != null ? "● " : "○ ";
+                        string botTitle = $"{statusTag}{botName} {genderTag}";
+
+                        new GUITextBlock(new RectTransform(new Vector2(0.32f, 1f), rowLayout.RectTransform), botTitle, textAlignment: Alignment.CenterLeft)
+                        {
+                            TextColor = liveBot != null ? new Color(130, 230, 200) : Color.LightGray,
+                            ToolTip = liveBot != null ? TTSManager.GetLoc("Активный бот на подлодке", "本局在线船员", "Active crew bot on submarine") : TTSManager.GetLoc("Сохраненный бот", "已保存配置", "Saved bot configuration")
+                        };
+
+                        // Stepper: < [ Voice Name ] >
+                        var stepperGroup = new GUILayoutGroup(new RectTransform(new Vector2(0.48f, 1f), rowLayout.RectTransform), isHorizontal: true)
+                        {
+                            RelativeSpacing = 0.02f
+                        };
+
+                        int curIdx = voiceList.FindIndex(vd => vd.Id == assign.VoiceId && vd.Engine == assign.Engine);
+                        if (curIdx < 0) curIdx = voiceList.FindIndex(vd => vd.Id == assign.VoiceId);
+                        if (curIdx < 0) curIdx = 0;
+
+                        var prevVoiceBtn = new GUIButton(new RectTransform(new Vector2(0.14f, 1f), stepperGroup.RectTransform), "<", Alignment.Center, "GUIButton");
+                        
+                        VoiceDef currentDef = voiceList[curIdx];
+                        string curVoiceName = currentDef.GetName();
+                        string curEngineTag = currentDef.Engine == "piper" ? "Piper" : "Silero";
+                        var voiceNameBtn = new GUIButton(new RectTransform(new Vector2(0.72f, 1f), stepperGroup.RectTransform), $"{curVoiceName} [{curEngineTag}]", Alignment.Center, "GUIButton");
+                        voiceNameBtn.TextColor = currentDef.Engine == "piper" ? new Color(140, 220, 255) : new Color(255, 205, 120);
+
+                        var nextVoiceBtn = new GUIButton(new RectTransform(new Vector2(0.14f, 1f), stepperGroup.RectTransform), ">", Alignment.Center, "GUIButton");
+
+                        var capturedAssign = assign;
+                        int capturedIdx = curIdx;
+
+                        Action<int> updateVoiceAction = delta =>
+                        {
+                            capturedIdx = (capturedIdx + delta) % voiceList.Count;
+                            if (capturedIdx < 0) capturedIdx += voiceList.Count;
+                            var newDef = voiceList[capturedIdx];
+                            capturedAssign.VoiceId = newDef.Id;
+                            capturedAssign.Engine = newDef.Engine;
+                            TTSManager.BotVoices[botName] = capturedAssign;
+
+                            voiceNameBtn.Text = $"{newDef.GetName()} [{(newDef.Engine == "piper" ? "Piper" : "Silero")}]";
+                            voiceNameBtn.TextColor = newDef.Engine == "piper" ? new Color(140, 220, 255) : new Color(255, 205, 120);
+                        };
+
+                        prevVoiceBtn.OnClicked = (b, ud) => { updateVoiceAction(-1); return true; };
+                        nextVoiceBtn.OnClicked = (b, ud) => { updateVoiceAction(1); return true; };
+                        voiceNameBtn.OnClicked = (b, ud) => { updateVoiceAction(1); return true; };
+
+                        // Quick Preview Button [ ▶ ]
+                        var prevBtn = new GUIButton(new RectTransform(new Vector2(0.12f, 1f), rowLayout.RectTransform), "", Alignment.Center, "GUIButton");
+                        prevBtn.ToolTip = TTSManager.GetLoc("Прослушать голос этого бота", "试听此AI船员的声音", "Preview this bot's voice");
+
+                        if (hasIcons)
+                        {
+                            try
+                            {
+                                var playSprite = new Sprite(iconAtlasPath, new Rectangle(384, 0, 64, 64));
+                                var playImg = new GUIImage(new RectTransform(new Vector2(0.55f, 0.55f), prevBtn.RectTransform, Anchor.Center), playSprite, scaleToFit: true)
+                                {
+                                    CanBeFocused = false
+                                };
+                                playImg.Color = new Color(255, 205, 120);
+                                playImg.HoverColor = Color.White;
+                                playImg.SelectedColor = Color.White;
+                            }
+                            catch { }
+                        }
+                        else
+                        {
+                            prevBtn.Text = ">";
+                            prevBtn.TextColor = Color.Orange;
+                        }
+
+                        prevBtn.OnClicked = (b, ud) =>
+                        {
+                            var curV = voiceList.Find(v => v.Id == capturedAssign.VoiceId && v.Engine == capturedAssign.Engine) ?? voiceList[capturedIdx];
+                            string sample = curV.Lang == "ru" 
+                                ? $"{botName} на связи, указания приняты." 
+                                : (curV.Lang == "zh" ? $"{botName} 收到，等待指令。" : $"{botName} here, standing by.");
+                            TTSManager.PreviewVoice(sample, curV.Id, capturedAssign.Speed, curV.Engine);
+                            return true;
+                        };
+
+                        // Reset this bot button
+                        var resetSingleBtn = new GUIButton(new RectTransform(new Vector2(0.06f, 1f), rowLayout.RectTransform), "X", Alignment.Center, "GUIButton");
+                        resetSingleBtn.TextColor = Color.Salmon;
+                        resetSingleBtn.ToolTip = TTSManager.GetLoc("Удалить или сбросить настройки этого бота", "重置或删除该船员配置", "Reset or remove this bot's config");
+                        resetSingleBtn.OnClicked = (b, ud) =>
+                        {
+                            TTSManager.BotVoices.Remove(botName);
+                            showBotsTab();
+                            return true;
+                        };
+                    }
+                }
+
+                // Manual Bot Add Bar at bottom of tab
+                var manualAddRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), isHorizontal: true)
+                {
+                    RelativeSpacing = 0.02f
+                };
+
+                var manualInput = new GUITextBox(new RectTransform(new Vector2(0.70f, 1f), manualAddRow.RectTransform), "")
+                {
+                    ToolTip = TTSManager.GetLoc("Введите имя бота для добавления в каталог", "输入AI船员名字以添加自定义配置", "Enter bot name to register in catalog")
+                };
+
+                var addBtn = new GUIButton(new RectTransform(new Vector2(0.28f, 1f), manualAddRow.RectTransform), TTSManager.GetLoc("+ ДОБАВИТЬ БОТА", "+ 添加船员", "+ ADD BOT"), Alignment.Center, "GUIButton");
+                addBtn.TextColor = Color.Turquoise;
+                addBtn.OnClicked = (b, ud) =>
+                {
+                    string newName = manualInput.Text?.Trim();
+                    if (!string.IsNullOrEmpty(newName) && !TTSManager.BotVoices.ContainsKey(newName))
+                    {
+                        TTSManager.BotVoices[newName] = new BotVoiceAssignment
+                        {
+                            BotName = newName,
+                            VoiceId = "aidar",
+                            Engine = "silero",
+                            Speed = 0
+                        };
+                        manualInput.Text = "";
+                        showBotsTab();
+                    }
+                    return true;
+                };
+            };
+
+            // Tab 3: Audio & Levels
+            Action showAudioTab = () =>
+            {
+                contentCard.ClearChildren();
+                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), contentCard.RectTransform, Anchor.Center)) { RelativeSpacing = 0.04f };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), TTSManager.GetLoc("ГРОМКОСТЬ И ЗВУК", "音量与音频设置", "VOLUME & AUDIO"), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.White
+                };
+
+                AddSlider(layout, TTSManager.GetLoc("ОБЩАЯ ГРОМКОСТЬ", "全局音量", "GLOBAL VOLUME"), draftGlobalVolume, 0f, 100f,
+                    v => ((int)v) + "%",
+                    v => draftGlobalVolume = (int)v,
+                    TTSManager.GetLoc("Общая громкость мода. 100% = нормальная громкость Barotrauma.", "模组的主音量。100% 为默认标准。", "Master TTS volume. 100% = standard game audio level."));
+
+                AddSlider(layout, TTSManager.GetLoc("УСИЛЕНИЕ (VOLUME BOOST)", "音量增益 (BOOST)", "VOLUME BOOST"), draftVolumeBoost, 100f, 500f,
+                    v => ((int)v) + "%",
+                    v => draftVolumeBoost = (int)v,
+                    TTSManager.GetLoc("Усиление звука до 500% (полезно, если голоса кажутся слишком тихими).", "将语音增益放大最多至500%（适合潜艇环境嘈杂时）。", "Audio boost up to 500% (useful for loud submarine ambient)."),
+                    isBoost: true);
+
+                AddSlider(layout, TTSManager.GetLoc("БАЗОВАЯ СКОРОСТЬ РЕЧИ", "基础语速", "BASE SPEECH SPEED"), draftBaseRate, -10f, 10f,
+                    v => (v > 0 ? "+" : "") + ((int)v).ToString(),
+                    v => draftBaseRate = (int)v,
+                    TTSManager.GetLoc("Базовая скорость речи для всех персонажей. 0 = стандарт.", "所有角色的全局基准语速。0 为正常值。", "Base speaking speed for all characters. 0 = default."));
+            };
+
+            // Tab 3: Radio & Suits
+            Action showRadioTab = () =>
+            {
+                contentCard.ClearChildren();
+                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), contentCard.RectTransform, Anchor.Center)) { RelativeSpacing = 0.04f };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), TTSManager.GetLoc("РАЦИЯ И СКАФАНДРЫ", "对讲机与潜水服", "RADIO & SUITS"), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.White
+                };
+
+                var radioBox = new GUITickBox(new RectTransform(new Vector2(1f, 0.12f), layout.RectTransform), TTSManager.GetLoc("Эффект рации", "启用无线电对讲机滤波音效", "Radio Filter"))
+                {
+                    Selected = draftEnableRadioFilter,
+                    ToolTip = TTSManager.GetLoc("Добавляет эффект рации и фоновые помехи к сообщениям по радио.", "应用无线电带通滤波及战术载波背景杂音。", "Applies radio bandpass filter and subtle static to radio chat.")
+                };
+                radioBox.OnSelected = (tb) => { draftEnableRadioFilter = tb.Selected; return true; };
+
+                var muffleBox = new GUITickBox(new RectTransform(new Vector2(1f, 0.12f), layout.RectTransform), TTSManager.GetLoc("Глушить в скафандрах и под водой", "潜水服/全密闭头盔/水下发闷音效", "Muffle in Suits / Underwater"))
+                {
+                    Selected = draftEnableSuitMuffle,
+                    ToolTip = TTSManager.GetLoc("Приглушает голос персонажа, если надет скафандр, закрытый шлем или он под водой.", "在水下、密闭潜水头盔内及跨舱室隔离门时呈现发闷的真实音效。", "Realistically muffles speech inside closed helmets, suits, or underwater.")
+                };
+                muffleBox.OnSelected = (tb) => { draftEnableSuitMuffle = tb.Selected; return true; };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.40f), layout.RectTransform),
+                    TTSManager.GetLoc(
+                        "Информация:\nМод поддерживает водолазные шлемы и костюмы из сторонних модов (Barotraumatic, Tidebreakers и др.). Отключите эти пункты, если хотите чистый звук без эффектов.",
+                        "说明：\n本模组全面兼容各类潜水服模组。如果您需要无滤镜的原声清晰语音，可关闭以上两个开关。",
+                        "Information:\nFully compatible with modded armor and diving suits. If you prefer completely dry, clean voices without atmospheric processing, disable both options above."
+                    ),
+                    textAlignment: Alignment.TopLeft, wrap: true)
+                {
+                    TextColor = Color.LightSlateGray
+                };
+            };
+
+            // Tab 4: Server & Engine
+            Action showServerTab = () =>
+            {
+                contentCard.ClearChildren();
+                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), contentCard.RectTransform, Anchor.Center)) { RelativeSpacing = 0.025f };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), TTSManager.GetLoc("СЕРВЕР И ДВИЖОК", "服务器与引擎设置", "SERVER & ENGINE"), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.White
+                };
+
+                var serverStartBtn = new GUIButton(new RectTransform(new Vector2(1f, 0.13f), layout.RectTransform), TTSManager.GetLoc("ЗАПУСТИТЬ ЛОКАЛЬНЫЙ СЕРВЕР", "启动本地TTS服务器", "START LOCAL SERVER"), Alignment.Center, "GUIButton");
+                serverStartBtn.TextColor = Color.LightGreen;
+                serverStartBtn.ToolTip = TTSManager.GetLoc("Запустить локальный сервер синтеза речи (start_server.bat). Откроется окно консоли.", "在当前计算机上启动本地TTS服务器（控制台窗口）。", "Launch local TTS speech server (start_server.bat) in a console window.");
+                serverStartBtn.OnClicked = (b, ud) =>
+                {
+                    if (StartServerProcess())
+                    {
+                        serverStartBtn.Text = TTSManager.GetLoc("Запуск сервера...", "正在启动...", "Starting server...");
+                        TTSManager.CheckServerStatusAsync();
+                    }
+                    return true;
+                };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.05f), layout.RectTransform), TTSManager.GetLoc("ДВИЖОК СИНТЕЗА:", "语音合成引擎：", "TTS ENGINE:"), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.LightGray
+                };
+
+                var engineDrop = new GUIDropDown(new RectTransform(new Vector2(1f, 0.12f), layout.RectTransform), "");
+                engineDrop.AddItem(TTSManager.GetLoc("Piper (Реалистично, на CPU)", "Piper (逼真自然, CPU运算)", "Piper (Realistic, CPU-based)"), "piper");
+                engineDrop.AddItem(TTSManager.GetLoc("Silero (Быстро, классика)", "Silero (经典极速, 轻量)", "Silero (Fast & Classic)"), "silero");
+                engineDrop.SelectItem(draftTTSEngine);
+                engineDrop.OnSelected = (guiComponent, obj) =>
+                {
+                    if (obj is string eng)
+                    {
+                        draftTTSEngine = eng;
+                    }
+                    return true;
+                };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.05f), layout.RectTransform), TTSManager.GetLoc("ЧАСТОТА ДИСКРЕТИЗАЦИИ:", "采样率清晰度：", "SAMPLE RATE:"), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.LightGray
+                };
+
+                var rateDrop = new GUIDropDown(new RectTransform(new Vector2(1f, 0.12f), layout.RectTransform), "");
+                rateDrop.AddItem(TTSManager.GetLoc("24000 Hz (Оптимально)", "24000 Hz (推荐标准)", "24000 Hz (Optimal)"), 24000);
+                rateDrop.AddItem(TTSManager.GetLoc("48000 Hz (Высокое качество)", "48000 Hz (高清晰度)", "48000 Hz (High Quality)"), 48000);
+                rateDrop.AddItem(TTSManager.GetLoc("8000 Hz (Рация / Lo-Fi)", "8000 Hz (复古电台)", "8000 Hz (Radio / Lo-Fi)"), 8000);
+                rateDrop.SelectItem(draftSampleRate);
+                rateDrop.OnSelected = (guiComponent, obj) =>
+                {
+                    if (obj is int r)
+                    {
+                        draftSampleRate = r;
+                    }
+                    return true;
+                };
+
+                var pingBtn = new GUIButton(new RectTransform(new Vector2(1f, 0.12f), layout.RectTransform), TTSManager.GetLoc("Проверить статус сервера", "检测服务器状态", "Ping TTS Server"), Alignment.Center, "GUIButton");
+                pingBtn.OnClicked = (b, ud) =>
+                {
+                    TTSManager.CheckServerStatusAsync();
+                    return true;
+                };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.22f), layout.RectTransform),
+                    TTSManager.GetLoc(
+                        "Защита от сбоев:\nЕсли Piper не может синтезировать фразу или недоступен, сервер автоматически синтезирует её через Silero и покажет уведомление в игре.",
+                        "容灾保护：\n若Piper出现异常或无法合成，系统将自动使用Silero兜底并在游戏内发出提示。",
+                        "Fail-safe protection:\nIf Piper encounters an error, the backend seamlessly synthesizes via Silero and displays an in-game notice."
+                    ),
+                    textAlignment: Alignment.TopLeft, wrap: true)
+                {
+                    TextColor = Color.LightSlateGray
+                };
+            };
+
+            // Tab 5: Author & License (GPL-3.0)
+            Action showLicenseTab = () =>
+            {
+                contentCard.ClearChildren();
+                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.95f), contentCard.RectTransform, Anchor.Center)) { RelativeSpacing = 0.02f };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), TTSManager.GetLoc("АВТОР И ЛИЦЕНЗИЯ (GNU GPLv3)", "作者与开源协议 (GNU GPLv3)", "AUTHOR & LICENSE (GNU GPLv3)"), textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.Gold
+                };
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.05f), layout.RectTransform), "BaroVoices TTS • Автор: VORON (VORON2272)", textAlignment: Alignment.CenterLeft)
+                {
+                    TextColor = Color.White
+                };
+
+                string licenseTerms = TTSManager.GetLoc(
+                    "Данный мод является свободным ПО и распространяется на условиях лицензии GNU General Public License v3.0 (GPL-3.0).\n\n" +
+                    "Обязательные требования лицензии GPL-3.0 при любых модификациях и форках:\n" +
+                    "1. Сохранение авторства: Оригинальное имя автора (VORON) и данная страница лицензии НЕ подлежат удалению.\n" +
+                    "2. Открытый исходный код: Любые производные версии и сборки обязаны распространяться исключительно с открытым исходным кодом под той же лицензией GNU GPLv3.\n" +
+                    "3. Уведомление об изменениях: Все внесённые модификации кода должны быть задокументированы.\n\n" +
+                    "Удаление информации об авторе или распространение закрытых сборок нарушает условия лицензии GNU GPLv3.",
+
+                    "本模组为自由开源软件，基于 GNU General Public License v3.0 (GPL-3.0) 协议分发。\n\n" +
+                    "所有分叉 (Fork) 与修改版本必须严格遵守以下 GPL-3.0 条款：\n" +
+                    "1. 保留原作者署名：原作者 (VORON) 署名及本许可证页面严禁删除。\n" +
+                    "2. 源码完全公开：任何衍生版本均必须以 GNU GPLv3 协议开源并提供全部源码。\n" +
+                    "3. 标明修改：对原代码的所有改动必须明确记录。\n\n" +
+                    "删除作者信息或闭源分发均属侵权违法行为。",
+
+                    "This mod is free software distributed under the terms of the GNU General Public License v3.0 (GPL-3.0).\n\n" +
+                    "Mandatory GPL-3.0 requirements for all forks, modifications, and modpacks:\n" +
+                    "1. Author Attribution: Original author credit (VORON) and this license tab MUST NOT be removed.\n" +
+                    "2. Open Source: Any derivative works must be distributed under the identical GNU GPLv3 license with full source code.\n" +
+                    "3. Change Tracking: All code changes must be clearly documented.\n\n" +
+                    "Removing author credits or closing the source code violates the GNU GPLv3 license."
+                );
+
+                new GUITextBlock(new RectTransform(new Vector2(1f, 0.58f), layout.RectTransform), licenseTerms, textAlignment: Alignment.TopLeft, wrap: true)
+                {
+                    TextColor = Color.LightSlateGray
+                };
+
+                var openLicenseBtn = new GUIButton(new RectTransform(new Vector2(1f, 0.14f), layout.RectTransform), TTSManager.GetLoc("ОТКРЫТЬ ФАЙЛ ЛИЦЕНЗИИ (LICENSE)", "打开模组许可证文件 (LICENSE)", "OPEN LICENSE FILE (LICENSE)"), Alignment.Center, "GUIButton");
+                openLicenseBtn.TextColor = Color.Gold;
+                openLicenseBtn.ToolTip = TTSManager.GetLoc("Открыть файл LICENSE из папки мода.", "在文本编辑器中打开模组文件夹内的LICENSE文件。", "Open LICENSE file from mod directory.");
+                openLicenseBtn.OnClicked = (b, ud) =>
                 {
                     try
                     {
-                        bool isMac = TTSManager.IsMacOS();
-                        bool isLinux = !isMac && TTSManager.IsUnixOrLinux();
-                        string scriptName = (isMac || isLinux) ? "start_server.sh" : "start_server.bat";
-                        string modPath = TTSManager.GetScriptPath(scriptName);
-                        if (System.IO.File.Exists(modPath))
+                        string licensePath = GetModPath("LICENSE");
+                        if (File.Exists(licensePath))
                         {
-                            string fullPath = System.IO.Path.GetFullPath(modPath);
-                            string langArg = TTSManager.IsRussianLanguage ? "ru" : (TTSManager.IsChineseLanguage ? "zh" : "en");
-                            
-                            if (isMac)
+                            string fullPath = Path.GetFullPath(licensePath);
+                            int p = (int)Environment.OSVersion.Platform;
+                            bool isUnix = (p == 4) || (p == 6) || (p == 128);
+                            if (isUnix)
                             {
-                                try
+                                Process.Start(new ProcessStartInfo
                                 {
-                                    System.Diagnostics.Process.Start("chmod", $"+x \"{fullPath}\"");
-                                }
-                                catch { }
-
-                                string appleScript = $"tell application \"Terminal\" to do script \"bash '{fullPath}' {langArg}\"";
-                                System.Diagnostics.Process.Start(new ProcessStartInfo
-                                {
-                                    FileName = "osascript",
-                                    Arguments = $"-e \"{appleScript}\"",
-                                    UseShellExecute = false
-                                });
-                            }
-                            else if (isLinux)
-                            {
-                                try
-                                {
-                                    System.Diagnostics.Process.Start("chmod", $"+x \"{fullPath}\"");
-                                }
-                                catch { }
-
-                                System.Diagnostics.Process.Start(new ProcessStartInfo
-                                {
-                                    FileName = "/bin/bash",
-                                    Arguments = $"-c \"x-terminal-emulator -e \\\"bash '{fullPath}' {langArg}\\\" || gnome-terminal -- bash '{fullPath}' {langArg} || konsole -e bash '{fullPath}' {langArg} || xfce4-terminal -e \\\"bash '{fullPath}' {langArg}\\\" || alacritty -e bash '{fullPath}' {langArg} || kitty bash '{fullPath}' {langArg} || xterm -e bash '{fullPath}' {langArg}\"",
+                                    FileName = "xdg-open",
+                                    Arguments = $"\"{fullPath}\"",
                                     UseShellExecute = false
                                 });
                             }
                             else
                             {
-                                System.Diagnostics.Process.Start("cmd.exe", $"/c start \"\" \"{fullPath}\" {langArg}");
+                                Process.Start(new ProcessStartInfo
+                                {
+                                    FileName = "notepad.exe",
+                                    Arguments = $"\"{fullPath}\"",
+                                    UseShellExecute = true
+                                });
                             }
-                            startBtn.Text = TTSManager.GetLoc("Запускается...", "正在启动...", "Starting...");
                         }
                     }
                     catch (Exception ex)
                     {
-                        TTSManager.Log("[BaroVoices TTS] Failed to start server: " + ex.Message);
+                        TTSManager.Log("[BaroVoices TTS] Failed to open license: " + ex.Message);
                     }
                     return true;
-                };
-
-                var perfBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.46f), layout.RectTransform), style: "InnerFrame");
-                var perfLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.95f, 0.9f), perfBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.05f };
-
-                var engineRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.3f), perfLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string engineTxt = TTSManager.GetLoc("Движок TTS:", "TTS 引擎：", "TTS Engine:");
-                new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), engineRow.RectTransform), engineTxt, textAlignment: Alignment.CenterLeft);
-                var engineDrop = new GUIDropDown(new RectTransform(new Vector2(0.5f, 1f), engineRow.RectTransform), "Engine", 2);
-                engineDrop.AddItem(TTSManager.GetLoc("Silero (Быстро)", "Silero (快速)", "Silero (Fast)"), "silero");
-                engineDrop.AddItem(TTSManager.GetLoc("Piper (Реалистично)", "Piper (逼真)", "Piper (Realistic)"), "piper");
-                
-
-                engineDrop.SelectItem(TTSManager.TTSEngine);
-
-                var engineWarningLabel = new GUITextBlock(new RectTransform(new Vector2(1f, 0.2f), perfLayout.RectTransform), "Silero TTS 不支持中文。请选择 Piper TTS引擎。", textAlignment: Alignment.Center)
-                {
-                    TextColor = Color.Red,
-                    Visible = TTSManager.IsChineseLanguage && TTSManager.TTSEngine == "silero"
-                };
-
-                engineDrop.OnSelected = (c, o) => { 
-                    if (o is string e) {
-                        TTSManager.TTSEngine = e; 
-                        engineWarningLabel.Visible = TTSManager.IsChineseLanguage && e == "silero";
-                    }
-                    return true; 
-                };
-
-                engineDrop.ToolTip = TTSManager.GetLoc("Silero генерирует чуть более 'роботизированный' голос. Piper работает на CPU и звучит реалистичнее.", "Silero生成速度较快。Piper在CPU上运行，声音更自然。", "Silero is older and runs fast. Piper runs on CPU and sounds much more natural.");
-
-                var qualRow = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.3f), perfLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string qualTxt = TTSManager.GetLoc("Качество голоса:", "音质：", "Voice Quality:");
-                new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), qualRow.RectTransform), qualTxt, textAlignment: Alignment.CenterLeft);
-                var qualDrop = new GUIDropDown(new RectTransform(new Vector2(0.5f, 1f), qualRow.RectTransform), "Quality", 3);
-                qualDrop.AddItem(TTSManager.GetLoc("Высокое (48000 Hz)", "高音质 (48000 Hz)", "High (48000 Hz)"), 48000);
-                qualDrop.AddItem(TTSManager.GetLoc("Баланс (24000 Hz)", "平衡 (24000 Hz)", "Balanced (24000 Hz)"), 24000);
-                qualDrop.AddItem(TTSManager.GetLoc("Рация (8000 Hz)", "无线电 (8000 Hz)", "Radio (8000 Hz)"), 8000);
-                
-                qualDrop.SelectItem(TTSManager.SampleRate);
-                qualDrop.OnSelected = (c, o) => { 
-                    if (o is int sr) TTSManager.SampleRate = sr; 
-                    return true; 
-                };
-                qualDrop.ToolTip = TTSManager.GetLoc("Влияет на чистоту звука. 48000 Hz требует больше ресурсов процессора, но голос менее 'роботизированный'.", "影响清晰度。48000 Hz 占用更多CPU，但声音不那么死板。", "Affects clarity. 48000 Hz uses more CPU but sounds less robotic.");
-
-                var checksRow2 = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.3f), perfLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                var debugBox = new GUITickBox(new RectTransform(new Vector2(0.45f, 1f), checksRow2.RectTransform), "Debug Logging")
-                {
-                    Selected = TTSManager.DebugLogging,
-                    ToolTip = TTSManager.GetLoc("Показывать системную информацию мода в консоли игры (F3).", "在游戏控制台 (F3) 中显示技术日志。", "Show technical mod logs in the game console (F3).")
-                };
-                debugBox.OnSelected = (tickBox) => 
-                { 
-                    TTSManager.DebugLogging = tickBox.Selected; 
-                    return true; 
                 };
             };
 
-            Action createPersonalTab = () => 
+            renderActiveTab = () =>
             {
-                contentArea.ClearChildren();
-                var layout = new GUILayoutGroup(new RectTransform(new Vector2(0.9f, 0.95f), contentArea.RectTransform, Anchor.Center)) { RelativeSpacing = 0.05f };
-
-                new GUITextBlock(new RectTransform(new Vector2(1f, 0.08f), layout.RectTransform), tabPersonal, textAlignment: Alignment.Center);
-                
-                string hint2 = TTSManager.GetLoc("Настрой голос СВОЕГО персонажа!\nОбязательно нажми 'Применить и Отправить', чтобы другие игроки на сервере услышали изменения.", "自定义你的角色声音！\n一定要点击“应用并同步”，与其他玩家分享。", "Customize YOUR character's voice!\nBe sure to click 'Apply & Sync' to share it with other players.");
-                new GUITextBlock(new RectTransform(new Vector2(1f, 0.15f), layout.RectTransform), hint2, textAlignment: Alignment.TopCenter, wrap: true) { TextColor = Color.LightYellow };
-
-                var voiceBlock = new GUIFrame(new RectTransform(new Vector2(1f, 0.5f), layout.RectTransform), style: "InnerFrame");
-                var voiceLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.9f, 0.9f), voiceBlock.RectTransform, Anchor.Center)) { RelativeSpacing = 0.05f };
-
-                var voiceContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.2f), voiceLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                new GUITextBlock(new RectTransform(new Vector2(0.45f, 1f), voiceContainer.RectTransform), TTSManager.GetLoc("Мой голос (Модель): ", "我的声音模型：", "My Voice Model: "), textAlignment: Alignment.CenterLeft);
-                var voiceDropdown = new GUIDropDown(new RectTransform(new Vector2(0.5f, 1f), voiceContainer.RectTransform), "Select Voice", 5);
-                
-                if (TTSManager.TTSEngine == "piper") {
-                    if (TTSManager.IsChineseLanguage) {
-                        voiceDropdown.AddItem("=== 中文 (Piper) ===", "");
-                        voiceDropdown.AddItem("华言 (女声)", "zh_huayan");
-                        voiceDropdown.AddItem("小雅 (女声)", "zh_xiao_ya");
-                        voiceDropdown.AddItem("超文 (男声)", "zh_chaowen");
-                    } else if (isRussian) {
-                        voiceDropdown.AddItem("=== РУССКИЕ (Piper) ===", "");
-                        voiceDropdown.AddItem("Дмитрий (Мужской 1)", "aidar");
-                        voiceDropdown.AddItem("Денис (Мужской 2)", "ru_denis");
-                        voiceDropdown.AddItem("Руслан (Мужской 3)", "ru_ruslan");
-                        voiceDropdown.AddItem("Ирина (Женский)", "xenia");
-                    } else {
-                        voiceDropdown.AddItem("=== ENGLISH (Piper) ===", "");
-                        voiceDropdown.AddItem("Arctic Male 1", "en_0");
-                        voiceDropdown.AddItem("Arctic Male 2", "en_1");
-                        voiceDropdown.AddItem("Arctic Male 3", "en_2");
-                        voiceDropdown.AddItem("Arctic Male 4", "en_6");
-                        voiceDropdown.AddItem("Arctic Male 5", "en_7");
-                        voiceDropdown.AddItem("Arctic Female 1", "en_4");
-                        voiceDropdown.AddItem("Arctic Female 2", "en_5");
-                    }
-                } else {
-                    if (isRussian) {
-                        voiceDropdown.AddItem("=== РУССКИЕ (Silero) ===", "");
-                        voiceDropdown.AddItem("Мужской 1 (aidar)", "aidar");
-                        voiceDropdown.AddItem("Мужской 2 (eugene)", "eugene");
-                        voiceDropdown.AddItem("Женский 1 (xenia)", "xenia");
-                        voiceDropdown.AddItem("Женский 2 (baya)", "baya");
-                        voiceDropdown.AddItem("Женский 3 (kseniya)", "kseniya");
-                    } else {
-                        voiceDropdown.AddItem("=== ENGLISH (Silero) ===", "");
-                        voiceDropdown.AddItem("Male 1 (en_13)", "en_13");
-                        voiceDropdown.AddItem("Male 2 (en_15)", "en_15");
-                        voiceDropdown.AddItem("Male 3 (en_22)", "en_22");
-                        voiceDropdown.AddItem("Female 1 (en_0)", "en_0");
-                        voiceDropdown.AddItem("Female 2 (en_4)", "en_4");
-                        voiceDropdown.AddItem("Female 3 (en_5)", "en_5");
-                    }
-                }
-
-                List<string> ruVoices = new List<string> { "aidar", "eugene", "xenia", "baya", "kseniya", "ru_ruslan", "ru_denis" };
-                List<string> zhVoices = new List<string> { "zh_huayan", "zh_xiao_ya", "zh_chaowen" };
-                List<string> enPiperVoices = new List<string> { "en_0", "en_1", "en_2", "en_4", "en_5", "en_6", "en_7" };
-                List<string> enSileroVoices = new List<string> { "en_13", "en_15", "en_22", "en_0", "en_4", "en_5" };
-
-                if (string.IsNullOrEmpty(TTSManager.VoiceName)) TTSManager.VoiceName = "aidar";
-
-                if (TTSManager.IsChineseLanguage && TTSManager.TTSEngine == "piper") {
-                    if (!zhVoices.Contains(TTSManager.VoiceName)) TTSManager.VoiceName = "zh_huayan";
-                } else if (isRussian) {
-                    if (!ruVoices.Contains(TTSManager.VoiceName)) TTSManager.VoiceName = "aidar";
-                } else {
-                    var enVoices = TTSManager.TTSEngine == "piper" ? enPiperVoices : enSileroVoices;
-                    if (!enVoices.Contains(TTSManager.VoiceName)) {
-                        TTSManager.VoiceName = TTSManager.TTSEngine == "piper" ? "en_0" : "en_13";
-                    }
-                }
-
-                voiceDropdown.SelectItem(TTSManager.VoiceName);
-                    
-                voiceDropdown.OnSelected = (component, obj) => {
-                    if (obj is string s && !string.IsNullOrEmpty(s)) {
-                        TTSManager.VoiceName = s;
-                    } else {
-                        // Revert selection if header clicked
-                        voiceDropdown.SelectItem(TTSManager.VoiceName);
-                    }
-                    return true;
-                };
-                voiceDropdown.ToolTip = TTSManager.GetLoc("Выберите модель голоса, которой будет говорить ваш персонаж в игре.", "选择你的角色在游戏中使用的声音模型。", "Choose the voice model your character will use in-game.");
-
-                var speedContainer = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.2f), voiceLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                string spdTxt = TTSManager.GetLoc("Моя скорость речи: ", "我的语速：", "My Speech Speed: ");
-                var speedLabel = new GUITextBlock(new RectTransform(new Vector2(0.5f, 1f), speedContainer.RectTransform), spdTxt + TTSManager.MySpeed, textAlignment: Alignment.CenterLeft);
-                var speedScroll = new GUIScrollBar(new RectTransform(new Vector2(0.45f, 1f), speedContainer.RectTransform), barSize: 0.1f, style: "GUISlider")
+                switch (activeTab)
                 {
-                    BarScroll = Math.Max(0f, Math.Min(1f, (TTSManager.MySpeed + 10f) / 20f))
-                };
-                speedScroll.OnMoved = (scrollbar, value) => 
-                { 
-                    TTSManager.MySpeed = (int)((value * 20f) - 10f); 
-                    speedLabel.Text = spdTxt + TTSManager.MySpeed;
-                    return true; 
-                };
-                speedScroll.ToolTip = TTSManager.GetLoc("Индивидуальная скорость вашей речи (прибавляется к базовой).", "你个人的语速修饰符。", "Your personal speaking speed modifier.");
+                    case 0: showGameplayTab(); break;
+                    case 1: showVoiceTab(); break;
+                    case 2: showBotsTab(); break;
+                    case 3: showAudioTab(); break;
+                    case 4: showRadioTab(); break;
+                    case 5: showServerTab(); break;
+                    case 6: showLicenseTab(); break;
+                    default: showGameplayTab(); break;
+                }
+            };
 
-                new GUITextBlock(new RectTransform(new Vector2(1f, 0.05f), voiceLayout.RectTransform), "");
+            // Custom Tab Icons creation helper
+            void CreateTabBtn(int index, string tip, Rectangle srcRect, Action onSelect)
+            {
+                var tabBtn = new GUIButton(new RectTransform(new Vector2(1f / 7.5f, 1f), tabBar.RectTransform), "", Alignment.Center, "GUITabButton");
+                tabBtn.ToolTip = tip;
 
-                var btnLayout = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.25f), voiceLayout.RectTransform), isHorizontal: true) { RelativeSpacing = 0.05f };
-                
-                string prevTxt = TTSManager.GetLoc("Прослушать", "试听", "Preview");
-                var previewBtn = new GUIButton(new RectTransform(new Vector2(0.45f, 1f), btnLayout.RectTransform), prevTxt, Alignment.Center, "GUIButton");
-                previewBtn.OnClicked = (btn, ud) =>
-                {
-                    string textToSpeak = TTSManager.GetLoc("Внимание экипажу! Проверка системы связи, как слышно?", "全体船员注意！无线电通讯测试，收到请回答？", "Attention crew! Radio comms test, how do you copy?");
-                    string myVoice = TTSManager.VoiceName;
-                    if (string.IsNullOrEmpty(myVoice)) myVoice = "baya";
-                    
-                    if (Character.Controlled != null)
-                        TTSManager.SpeakWithCustom(Character.Controlled, textToSpeak, myVoice, TTSManager.MySpeed);
-                    else
-                        TTSManager.SpeakWithCustom(null, textToSpeak, myVoice, TTSManager.MySpeed);
-                    return true;
-                };
-
-                string syncTxt = TTSManager.GetLoc("Применить и Отправить", "应用并同步", "Apply & Sync");
-                var syncBtn = new GUIButton(new RectTransform(new Vector2(0.5f, 1f), btnLayout.RectTransform), syncTxt, Alignment.Center, "GUIButton");
-                syncBtn.TextColor = Color.LightGreen;
-                syncBtn.OnClicked = (btn, ud) =>
+                if (hasIcons)
                 {
                     try
                     {
-                        if (Character.Controlled == null)
-                        {
-                            syncBtn.Text = TTSManager.GetLoc("Только в игре!", "只能在游戏内同步！", "In-game only!");
-                            return true;
-                        }
+                        var sprite = new Sprite(iconAtlasPath, srcRect);
+                        var iconImg = new GUIImage(new RectTransform(new Vector2(0.65f, 0.65f), tabBtn.RectTransform, Anchor.Center), sprite, scaleToFit: true);
+                        iconImg.Color = new Color(180, 230, 220, 255);
+                        iconImg.HoverColor = new Color(240, 255, 250, 255);
+                        iconImg.SelectedColor = Color.White;
+                    }
+                    catch { }
+                }
 
-                        string myVoice = TTSManager.VoiceName;
-                        if (string.IsNullOrEmpty(myVoice)) myVoice = "baya";
-                        string luaCmd = $"if SendMyVoiceSettings then SendMyVoiceSettings({TTSManager.MyPitch}, {TTSManager.MySpeed}, \"{myVoice}\") end";
-                        GameMain.LuaCs.Lua.DoString(luaCmd);
-                        syncBtn.Text = TTSManager.GetLoc("Успешно отправлено!", "已同步！", "Synced!");
-                    }
-                    catch (Exception ex)
+                tabBtn.OnClicked = (b, ud) =>
+                {
+                    activeTab = index;
+                    for (int i = 0; i < tabButtons.Count; i++)
                     {
-                        TTSManager.Log("[BaroVoices TTS] Sync failed: " + ex.Message);
+                        if (tabButtons[i] != null) tabButtons[i].Selected = (i == activeTab);
                     }
+                    renderActiveTab();
                     return true;
                 };
-            };
 
-            var btnGameplay = new GUIButton(new RectTransform(new Vector2(1f, 0.15f), tabBar.RectTransform), tabGameplay, Alignment.Center, "GUIButton");
-            btnGameplay.OnClicked = (btn, ud) => { createGameplayTab(); return true; };
+                tabButtons.Add(tabBtn);
+            }
 
-            var btnServer = new GUIButton(new RectTransform(new Vector2(1f, 0.15f), tabBar.RectTransform), tabServer, Alignment.Center, "GUIButton");
-            btnServer.OnClicked = (btn, ud) => { createServerTab(); return true; };
+            tabBar.RelativeSpacing = 0.01f;
 
-            var btnPersonal = new GUIButton(new RectTransform(new Vector2(1f, 0.15f), tabBar.RectTransform), tabPersonal, Alignment.Center, "GUIButton");
-            btnPersonal.OnClicked = (btn, ud) => { createPersonalTab(); return true; };
+            CreateTabBtn(0, TTSManager.GetLoc("Основные настройки", "基础设置", "General Settings"), new Rectangle(0, 0, 64, 64), showGameplayTab);
+            CreateTabBtn(1, TTSManager.GetLoc("Мой голос", "我的声音", "My Voice"), new Rectangle(64, 0, 64, 64), showVoiceTab);
+            CreateTabBtn(2, TTSManager.GetLoc("Голоса ботов (Экипаж)", "AI船员音色目录", "Bot Voices (Crew)"), new Rectangle(448, 0, 64, 64), showBotsTab);
+            CreateTabBtn(3, TTSManager.GetLoc("Громкость и звук", "音量与音频", "Volume & Audio"), new Rectangle(128, 0, 64, 64), showAudioTab);
+            CreateTabBtn(4, TTSManager.GetLoc("Рация и скафандры", "对讲机与潜水服", "Radio & Suits"), new Rectangle(192, 0, 64, 64), showRadioTab);
+            CreateTabBtn(5, TTSManager.GetLoc("Сервер и движок", "服务器与引擎", "Server & Engine"), new Rectangle(256, 0, 64, 64), showServerTab);
+            CreateTabBtn(6, TTSManager.GetLoc("Автор и лицензия (GPLv3)", "作者与许可证 (GPLv3)", "Author & License (GPLv3)"), new Rectangle(320, 0, 64, 64), showLicenseTab);
 
-            new GUITextBlock(new RectTransform(new Vector2(1f, 0.10f), tabBar.RectTransform), ""); // Filler
-
-            var supportBtn = new GUIButton(new RectTransform(new Vector2(1f, 0.15f), tabBar.RectTransform), TTSManager.GetLoc("Поддержать Автора", "支持作者", "Support Author"), Alignment.Center, "GUIButton");
-            supportBtn.TextColor = Color.Gold;
-            supportBtn.OnClicked = (btn, ud) =>
+            for (int i = 0; i < tabButtons.Count; i++)
             {
-                try {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = "https://boosty.to/voron227",
-                        UseShellExecute = true
-                    });
-                } catch { }
-                return true;
+                if (tabButtons[i] != null) tabButtons[i].Selected = (i == activeTab);
+            }
+
+            // Bottom Action Bar: Cancel, Reset Defaults, Apply
+            var bottomBar = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.08f), rightCol.RectTransform), isHorizontal: true)
+            {
+                Stretch = true,
+                RelativeSpacing = 0.02f
             };
 
-            var closeBtn = new GUIButton(new RectTransform(new Vector2(1f, 0.15f), tabBar.RectTransform), closeText, Alignment.Center, "GUIButton");
-            closeBtn.OnClicked = (btn, ud) =>
+            var cancelBtn = new GUIButton(new RectTransform(new Vector2(0.32f, 1f), bottomBar.RectTransform), TTSManager.GetLoc("ОТМЕНА", "取消", "CANCEL"), Alignment.Center, "GUIButton");
+            cancelBtn.TextColor = Color.Salmon;
+            cancelBtn.OnClicked = (b, ud) =>
             {
                 CloseMenu();
                 return true;
             };
 
-            createGameplayTab();
+            var resetBtn = new GUIButton(new RectTransform(new Vector2(0.32f, 1f), bottomBar.RectTransform), TTSManager.GetLoc("ПО УМОЛЧАНИЮ", "恢复默认", "DEFAULTS"), Alignment.Center, "GUIButton");
+            resetBtn.OnClicked = (b, ud) =>
+            {
+                draftGlobalVolume = 100;
+                draftVolumeBoost = 100;
+                draftBaseRate = 0;
+                draftEnableUniqueVoices = true;
+                draftEnableBotTTS = true;
+                draftEnableVoiceQueue = true;
+                draftEnableSuitMuffle = true;
+                draftEnableRadioFilter = true;
+                draftTTSEngine = "silero";
+                draftSampleRate = 24000;
+                draftMySpeed = 0;
+                renderActiveTab();
+                return true;
+            };
 
-            TTSManager.Log("[BaroVoices TTS] ToggleMenu: Successfully created all UI elements!");
+            var applyBtn = new GUIButton(new RectTransform(new Vector2(0.32f, 1f), bottomBar.RectTransform), TTSManager.GetLoc("ПРИМЕНИТЬ", "应用设置", "APPLY"), Alignment.Center, "GUIButton");
+            applyBtn.TextColor = Color.LightGreen;
+            applyBtn.OnClicked = (b, ud) =>
+            {
+                try
+                {
+                    TTSManager.GlobalVolume = draftGlobalVolume;
+                    TTSManager.VolumeBoost = draftVolumeBoost;
+                    TTSManager.BaseRate = draftBaseRate;
+                    TTSManager.EnableUniqueVoices = draftEnableUniqueVoices;
+                    TTSManager.EnableBotTTS = draftEnableBotTTS;
+                    TTSManager.EnableVoiceQueue = draftEnableVoiceQueue;
+                    TTSManager.EnableSuitMuffle = draftEnableSuitMuffle;
+                    TTSManager.EnableRadioFilter = draftEnableRadioFilter;
+                    TTSManager.TTSEngine = draftTTSEngine;
+                    TTSManager.SampleRate = draftSampleRate;
+                    TTSManager.VoiceName = draftVoiceName;
+                    TTSManager.MySpeed = draftMySpeed;
+                    TTSManager.SaveSettings();
+                    TTSManager.SaveBotVoices();
+
+                    if (Character.Controlled != null)
+                    {
+                        string v = string.IsNullOrEmpty(TTSManager.VoiceName) ? "baya" : TTSManager.VoiceName;
+                        string luaCmd = $"if SendMyVoiceSettings then SendMyVoiceSettings({TTSManager.MyPitch}, {TTSManager.MySpeed}, \"{v}\", \"{TTSManager.TTSEngine}\") end";
+                        try { GameMain.LuaCs.Lua?.DoString(luaCmd); } catch { }
+                    }
+
+                    try
+                    {
+                        string appliedNotice = TTSManager.GetLoc(
+                            "[BaroVoices TTS] Настройки успешно применены.",
+                            "[BaroVoices TTS] 设置已保存并成功应用。",
+                            "[BaroVoices TTS] Settings successfully applied."
+                        );
+                        GUI.AddMessage(appliedNotice, Color.LightGreen, 3.5f);
+                    }
+                    catch { }
+
+                    CloseMenu();
+                }
+                catch (Exception ex)
+                {
+                    LuaCsLogger.LogError("[BaroVoices TTS] Apply Error: " + ex.Message);
+                }
+                return true;
+            };
+
+            // Initial render
+            renderActiveTab();
+
+            TTSManager.CheckServerStatusAsync();
+            TTSManager.Log("[BaroVoices TTS] ToggleMenu: Vocal Terminal successfully initialized!");
         }
         catch (Exception ex)
         {

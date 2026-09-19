@@ -6,7 +6,6 @@ import torch
 import soundfile as sf
 from concurrent.futures import ThreadPoolExecutor
 import sys
-import os
 import re
 import hashlib
 import torchaudio
@@ -16,12 +15,54 @@ import wave
 import ssl
 
 try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
+try:
     import piper_phonemize
     espeak_path = os.path.join(os.path.dirname(piper_phonemize.__file__), 'espeak-ng-data')
     if os.path.exists(espeak_path):
         os.environ['PIPER_ESPEAKNG_DATA_DIRECTORY'] = espeak_path
 except Exception:
     pass
+
+FastChinesePhonemizer = None
+try:
+    import pypinyin
+    from piper.phonemize_chinese import PHONEME_TO_ID, _normalize_g2pw_syllable, _split_initial_final_tone
+
+    class FastChinesePhonemizer:
+        def phonemize(self, text: str):
+            pinyin_list = pypinyin.pinyin(text, style=pypinyin.Style.TONE3, neutral_tone_with_five=True)
+            sentence_phonemes = []
+            for item in pinyin_list:
+                raw = item[0]
+                if raw in PHONEME_TO_ID:
+                    sentence_phonemes.append(raw)
+                    continue
+                syl = _normalize_g2pw_syllable(raw)
+                ini_p, fin_p, tone = _split_initial_final_tone(syl)
+                if not fin_p:
+                    if syl in PHONEME_TO_ID:
+                        sentence_phonemes.append(syl)
+                    continue
+                if not ini_p:
+                    ini_p = 'Ø'
+                for sym in (ini_p, fin_p, tone):
+                    if sym and sym in PHONEME_TO_ID:
+                        sentence_phonemes.append(sym)
+            return [sentence_phonemes]
+except Exception:
+    pass
+
+try:
+    from piper import PhonemeType
+except Exception:
+    PhonemeType = None
 
 try:
     _create_unverified_https_context = ssl._create_unverified_context
@@ -50,9 +91,102 @@ device = None
 executor = None
 piper_models = {}
 sample_rate = 24000
+try:
+    import piper
+    from piper import PiperVoice
+    piper_available = True
+except Exception:
+    piper_available = False
+
+def ensure_piper_model(model_name, piper_dir):
+    onnx_path = os.path.join(piper_dir, f"{model_name}.onnx")
+    json_path = os.path.join(piper_dir, f"{model_name}.onnx.json")
+    
+    if os.path.exists(onnx_path) and os.path.getsize(onnx_path) > 1000000 and \
+       os.path.exists(json_path) and os.path.getsize(json_path) > 100:
+        return onnx_path, json_path
+
+    # Try fast GitHub release mirror (sherpa-onnx prebuilt archives)
+    gh_url = f"https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-{model_name}.tar.bz2"
+    try:
+        print(f"Загрузка модели {model_name} (GitHub зеркало)..." if is_ru else f"Downloading model {model_name} (GitHub mirror)...")
+        r = requests.get(gh_url, stream=True, timeout=60)
+        if r.status_code == 200:
+            import tarfile, shutil
+            tmp_tar = os.path.join(piper_dir, f"{model_name}.tar.bz2.tmp")
+            with open(tmp_tar, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+            with tarfile.open(tmp_tar, 'r:bz2') as tar:
+                for m in tar.getmembers():
+                    if m.name.endswith(f"{model_name}.onnx"):
+                        with tar.extractfile(m) as f_in, open(onnx_path, 'wb') as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                    elif m.name.endswith(f"{model_name}.onnx.json"):
+                        with tar.extractfile(m) as f_in, open(json_path, 'wb') as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+            if os.path.exists(tmp_tar):
+                os.remove(tmp_tar)
+            if os.path.exists(onnx_path) and os.path.getsize(onnx_path) > 1000000:
+                print(f"Модель {model_name} успешно загружена и готова!" if is_ru else f"Model {model_name} ready!")
+                return onnx_path, json_path
+    except Exception as e:
+        pass
+    
+    return onnx_path, json_path
+
+def download_piper_file(url, target_path, expected_min_size=1000):
+    if os.path.exists(target_path) and os.path.getsize(target_path) >= expected_min_size:
+        return
+    tmp_path = target_path + ".tmp"
+    try:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+    except Exception:
+        pass
+    
+    file_name = os.path.basename(target_path)
+    
+    urls_to_try = [url]
+    if "huggingface.co" in url:
+        mirror_url = url.replace("https://huggingface.co/", "https://hf-mirror.com/")
+        urls_to_try.append(mirror_url)
+    
+    last_err = None
+    for attempt_url in urls_to_try:
+        try:
+            domain = "hf-mirror" if "hf-mirror" in attempt_url else "huggingface"
+            print(f"Загрузка файла {file_name}..." if is_ru else f"Downloading {file_name}...")
+            resp = requests.get(attempt_url, stream=True, timeout=30, allow_redirects=True)
+            resp.raise_for_status()
+            
+            with open(tmp_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 64):
+                    if chunk:
+                        f.write(chunk)
+            
+            if os.path.exists(tmp_path) and os.path.getsize(tmp_path) >= expected_min_size:
+                if os.path.exists(target_path):
+                    os.remove(target_path)
+                os.rename(tmp_path, target_path)
+                print(f"Файл {file_name} успешно сохранён!" if is_ru else f"{file_name} saved successfully!")
+                return
+            else:
+                sz = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
+                raise RuntimeError(f"Файл {file_name} слишком мал ({sz} байт)")
+        except Exception as e:
+            last_err = e
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+    
+    raise RuntimeError(f"Не удалось скачать {file_name}: {last_err}")
 
 def initialize_server():
-    global model_ru, model_en, device, executor, piper_models
+    global model_ru, model_en, device, executor, piper_models, piper_available
     
     if device_arg in ['gpu', 'cuda'] and torch.cuda.is_available():
         device = torch.device('cuda')
@@ -92,7 +226,7 @@ def initialize_server():
                                              trust_repo=True)
         model_en.to(device)
         
-        print("Модели успешно загружены!" if is_ru else "Models loaded successfully!")
+        print("Модели Silero успешно загружены!" if is_ru else "Silero models loaded successfully!")
         print("Прогрев нейросетей (это уберет лаг при первой фразе)..." if is_ru else "Warming up neural networks...")
         
         try:
@@ -102,7 +236,16 @@ def initialize_server():
         except Exception:
             pass
     except Exception as e:
-        print(f"Ошибка загрузки моделей: {e}" if is_ru else f"Error loading models: {e}")
+        print(f"Ошибка загрузки моделей Silero: {e}" if is_ru else f"Error loading Silero models: {e}")
+
+    try:
+        import piper
+        from piper import PiperVoice
+        piper_available = True
+        print("Движок Piper TTS готов к параллельной работе." if is_ru else "Piper TTS engine ready for parallel operation.")
+    except Exception as pe:
+        piper_available = False
+        print(f"Внимание: piper-tts не загружен ({pe}). Будет инициализирован по требованию." if is_ru else f"Warning: piper-tts not loaded ({pe}). Will init on demand.")
 
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -120,9 +263,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         has_cyrillic = bool(re.search('[а-яА-ЯёЁ]', text))
         has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
         
-        if has_chinese and engine == "piper":
+        if (has_chinese or speaker.startswith("zh_")) and engine == "piper":
             active_model = model_en
-            active_speaker = "zh_huayan" if not speaker.startswith("zh_") else speaker
+            active_speaker = speaker if speaker.startswith("zh_") else "zh_huayan"
             lang_label = "ZH"
         elif has_cyrillic:
             active_model = model_ru
@@ -149,12 +292,23 @@ class RequestHandler(BaseHTTPRequestHandler):
                 active_speaker = en_speaker_map.get(speaker, "en_13")
             lang_label = "EN"
             
-        print(f"[{lang_label}] Генерируем голос ({msg_type}) [Движок: {engine}]: {active_speaker} -> {text} (Boost: {boost}x)" if is_ru else f"[{lang_label}] Generating voice ({msg_type}) [Engine: {engine}]: {active_speaker} -> {text} (Boost: {boost}x)")
+        try:
+            print(f"[{lang_label}] Генерируем голос ({msg_type}) [Движок: {engine}]: {active_speaker} -> {text} (Boost: {boost}x)" if is_ru else f"[{lang_label}] Generating voice ({msg_type}) [Engine: {engine}]: {active_speaker} -> {text} (Boost: {boost}x)")
+        except Exception:
+            try:
+                safe_text = text.encode('ascii', errors='backslashreplace').decode('ascii')
+                print(f"[{lang_label}] Voice ({msg_type}) [{engine}]: {active_speaker} -> {safe_text}")
+            except Exception:
+                pass
         
         cache_key_raw = f"{text}|{active_speaker}|{req_sample_rate}|{engine}|v5"
         cache_key = hashlib.md5(cache_key_raw.encode('utf-8')).hexdigest()
         cache_path = os.path.join(CACHE_DIR, f"{cache_key}.pt")
         
+        fallback_triggered = False
+        fallback_reason = ""
+        actual_engine = engine
+
         if os.path.exists(cache_path):
             audio = torch.load(cache_path, weights_only=True)
             try:
@@ -164,62 +318,98 @@ class RequestHandler(BaseHTTPRequestHandler):
         else:
             if engine == "piper":
                 try:
-                    import urllib.request
-                    from piper import PiperVoice
+                    global piper_available
+                    if not piper_available:
+                        try:
+                            import subprocess
+                            print("Библиотека piper-tts не найдена. Автоустановка..." if is_ru else "Library piper-tts not found. Auto-installing...")
+                            subprocess.check_call([sys.executable, "-m", "pip", "install", "piper-tts"])
+                            import piper
+                            from piper import PiperVoice
+                            piper_available = True
+                            print("piper-tts успешно установлен!" if is_ru else "piper-tts installed successfully!")
+                        except Exception as ie:
+                            raise RuntimeError(f"Не удалось установить piper-tts: {ie}")
+                    else:
+                        from piper import PiperVoice
                     
                     piper_dir = os.path.join(os.path.dirname(__file__), "piper_models")
                     if not os.path.exists(piper_dir):
-                        os.makedirs(piper_dir)
+                        os.makedirs(piper_dir, exist_ok=True)
                         
                     speaker_id = None
-                    if active_speaker.startswith("zh_"):
+                    pitch_shift_steps = 0.0
+                    length_scale = 1.0
+
+                    zh_speakers = {
+                        "zh_huayan": ("zh_CN-huayan-medium", "huayan", 0.0, 1.0),
+                        "zh_huayan_officer": ("zh_CN-huayan-medium", "huayan", -2.0, 0.95),
+                        "zh_huayan_cadet": ("zh_CN-huayan-medium", "huayan", 1.8, 1.05),
+                        "zh_xiao_ya": ("zh_CN-xiao_ya-medium", "xiao_ya", 0.0, 1.0),
+                        "zh_xiao_ya_medic": ("zh_CN-xiao_ya-medium", "xiao_ya", 1.2, 1.02),
+                        "zh_chaowen": ("zh_CN-chaowen-medium", "chaowen", 0.0, 1.0),
+                        "zh_chaowen_captain": ("zh_CN-chaowen-medium", "chaowen", -1.5, 0.94),
+                        "zh_chaowen_engineer": ("zh_CN-chaowen-medium", "chaowen", 0.8, 1.0),
+                    }
+
+                    if active_speaker in zh_speakers:
+                        model_name, short_name, pitch_shift_steps, length_scale = zh_speakers[active_speaker]
+                        json_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/{short_name}/medium/{model_name}.onnx.json"
+                        onnx_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/{short_name}/medium/{model_name}.onnx"
+                    elif active_speaker.startswith("zh_"):
                         short_name = active_speaker.split('_', 1)[1]
                         model_name = f"zh_CN-{short_name}-medium"
                         json_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/{short_name}/medium/{model_name}.onnx.json"
                         onnx_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/{short_name}/medium/{model_name}.onnx"
                     elif has_cyrillic:
-                        if active_speaker in ["aidar"]:
-                            model_name = "ru_RU-dmitri-medium"
-                        elif active_speaker in ["ru_denis", "eugene"]:
-                            model_name = "ru_RU-denis-medium"
-                        elif active_speaker == "ru_ruslan":
-                            model_name = "ru_RU-ruslan-medium"
-                        else:
-                            model_name = "ru_RU-irina-medium"
-                            
-                        short_name = model_name.split('-')[1]
+                        ru_speakers = {
+                            "aidar": (0, "ru_RU-dmitri-medium", "dmitri"),
+                            "baya": (0, "ru_RU-irina-medium", "irina"),
+                            "kseniya": (0, "ru_RU-denis-medium", "denis"),
+                            "xenia": (0, "ru_RU-ruslan-medium", "ruslan"),
+                            "eugene": (0, "ru_RU-dmitri-medium", "dmitri")
+                        }
+                        sp_info = ru_speakers.get(active_speaker, (0, "ru_RU-irina-medium", "irina"))
+                        speaker_id = sp_info[0]
+                        model_name = sp_info[1]
+                        short_name = sp_info[2]
                         json_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/{short_name}/medium/{model_name}.onnx.json"
                         onnx_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/{short_name}/medium/{model_name}.onnx"
                     else:
                         model_name = "en_US-arctic-medium"
                         json_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx.json"
                         onnx_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
-                        arctic_map = {"en_0": 0, "en_1": 1, "en_2": 3, "en_3": 7, "en_4": 2, "en_5": 4, "en_6": 7, "en_7": 14}
-                        speaker_id = arctic_map.get(active_speaker, 0)
-                        
-                    onnx_path = os.path.join(piper_dir, f"{model_name}.onnx")
-                    json_path = os.path.join(piper_dir, f"{model_name}.onnx.json")
-                    
-                    if not os.path.exists(onnx_path) or not os.path.exists(json_path):
-                        print(f"Скачивание модели Piper {model_name} (это займет время)..." if is_ru else f"Downloading Piper model {model_name}...")
-                        import warnings
-                        from urllib3.exceptions import InsecureRequestWarning
-                        warnings.simplefilter('ignore', InsecureRequestWarning)
-                        open(onnx_path, 'wb').write(requests.get(onnx_url, verify=False).content)
-                        open(json_path, 'wb').write(requests.get(json_url, verify=False).content)
-                        print("Скачивание завершено!" if is_ru else "Download complete!")
+                        if active_speaker.startswith("en_"):
+                            try:
+                                speaker_id = int(active_speaker.split("_")[1])
+                            except Exception:
+                                speaker_id = 0
+                                
+                    onnx_path, json_path = ensure_piper_model(model_name, piper_dir)
+                    if not (os.path.exists(onnx_path) and os.path.getsize(onnx_path) > 1000000 and os.path.exists(json_path) and os.path.getsize(json_path) > 100):
+                        download_piper_file(json_url, json_path, expected_min_size=100)
+                        download_piper_file(onnx_url, onnx_path, expected_min_size=1000000)
                         
                     global piper_models
                     if model_name not in piper_models:
-                        piper_models[model_name] = PiperVoice.load(onnx_path, config_path=json_path)
+                        v = PiperVoice.load(onnx_path, config_path=json_path)
+                        if hasattr(v, "config") and getattr(v.config, "phoneme_type", None) == PhonemeType.PINYIN and FastChinesePhonemizer is not None:
+                            v._chinese_phonemizer = FastChinesePhonemizer()
+                        piper_models[model_name] = v
                     
                     voice = piper_models[model_name]
                     
                     wav_io = io.BytesIO()
                     with wave.open(wav_io, 'wb') as wav_file:
+                        from piper.config import SynthesisConfig
+                        syn_kwargs = {}
                         if speaker_id is not None:
-                            from piper.config import SynthesisConfig
-                            syn_config = SynthesisConfig(speaker_id=speaker_id)
+                            syn_kwargs["speaker_id"] = speaker_id
+                        if length_scale != 1.0:
+                            syn_kwargs["length_scale"] = length_scale
+                            
+                        if syn_kwargs:
+                            syn_config = SynthesisConfig(**syn_kwargs)
                             voice.synthesize_wav(text, wav_file, syn_config=syn_config)
                         else:
                             voice.synthesize_wav(text, wav_file)
@@ -228,15 +418,26 @@ class RequestHandler(BaseHTTPRequestHandler):
                     audio_np, orig_sr = sf.read(wav_io)
                     audio = torch.from_numpy(audio_np).float()
                     
+                    if pitch_shift_steps != 0.0:
+                        audio = F.pitch_shift(audio.unsqueeze(0), orig_sr, n_steps=pitch_shift_steps).squeeze(0)
+                        
                     if orig_sr != req_sample_rate:
                         audio = F.resample(audio, orig_sr, req_sample_rate)
                         
-                    audio = audio.squeeze(0)
+                    audio = audio.squeeze(0) if audio.dim() > 1 else audio
+                    actual_engine = "piper"
                     
                 except Exception as e:
                     print(f"Ошибка генерации Piper: {e}. Переключение на Silero." if is_ru else f"Piper generation error: {e}. Falling back to Silero.")
-                    audio = active_model.apply_tts(text=text, speaker=active_speaker, sample_rate=req_sample_rate)
+                    fallback_triggered = True
+                    fallback_reason = str(e)
+                    actual_engine = "silero"
+                    fb_spk = "aidar" if has_cyrillic else "en_0"
+                    if active_speaker in ["baya", "aidar", "kseniya", "xenia", "eugene", "en_0", "en_13", "en_15", "en_22"]:
+                        fb_spk = active_speaker
+                    audio = active_model.apply_tts(text=text, speaker=fb_spk, sample_rate=req_sample_rate)
             else:
+                actual_engine = "silero"
                 audio = active_model.apply_tts(text=text, speaker=active_speaker, sample_rate=req_sample_rate)
                 
             # Trim trailing silence/sighs from Piper/Silero
@@ -304,7 +505,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         audio_np = audio.detach().cpu().numpy()
         sf.write(buffer, audio_np, playback_rate, format='OGG', subtype='VORBIS')
         buffer.seek(0)
-        return buffer
+        return buffer, fallback_triggered, fallback_reason, actual_engine
 
     def do_POST(self):
         content_length = int(self.headers['Content-Length'])
@@ -335,10 +536,15 @@ class RequestHandler(BaseHTTPRequestHandler):
             
         try:
             future = executor.submit(self._generate_audio, text, speaker, req_sample_rate, boost, msg_type, distance, rate, engine, radio_filter)
-            buffer = future.result()
+            buffer, fallback_triggered, fallback_reason, actual_engine = future.result()
             
             self.send_response(200)
             self.send_header('Content-type', 'audio/ogg')
+            self.send_header('X-TTS-Engine', str(actual_engine))
+            self.send_header('X-TTS-Fallback', 'true' if fallback_triggered else 'false')
+            if fallback_triggered and fallback_reason:
+                clean_reason = re.sub(r'[\r\n]+', ' ', str(fallback_reason))[:120]
+                self.send_header('X-TTS-Fallback-Reason', clean_reason.encode('ascii', 'replace').decode('ascii'))
             self.end_headers()
             self.wfile.write(buffer.read())
         except Exception as e:
